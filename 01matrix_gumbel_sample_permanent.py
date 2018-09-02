@@ -21,6 +21,9 @@ import scipy
 import scipy.stats
 import copy
 import os
+# from libc.stdlib cimport malloc, free
+# from libc.math cimport pow
+
 # sys.path.insert(0, '/Users/jkuck/research/atlas_AAAI_2017/refactored_multi_model/')
 # from permanent_model import compute_gumbel_upper_bound, approx_permanent3
 # from boundZ import calculate_gumbel_slack
@@ -52,7 +55,7 @@ matrix_permanent_UBs = {}
 #     486-489, Jan. 1995.
 
 
-def sample_log_permanent_with_gumbels(matrix):
+def sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix):
     '''
 
     Inputs:
@@ -74,7 +77,10 @@ def sample_log_permanent_with_gumbels(matrix):
 
     # BEST_ROW_CACHE = {}
     global matrix_permanent_UBs
-    matrix_permanent_UBs = {}
+    global BEST_ROW_CACHE
+    if clear_caches_new_matrix:
+        matrix_permanent_UBs = {}
+        BEST_ROW_CACHE = {} 
     N = matrix.shape[0]
     assert(N == matrix.shape[1])
     global ORIGINAL_MATRIX
@@ -199,7 +205,8 @@ def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, 
     # print BEST_ROW_CACHE
     
     if first_sample and len(prv_required_cells) == 0:
-        BEST_ROW_CACHE = {} #clear the cache, new matrix
+        pass
+        # BEST_ROW_CACHE = {} #clear the cache, new matrix
         # print "cache cleared!!"
     else:
         assert(len(BEST_ROW_CACHE)>0), (first_sample, len(prv_required_cells), BEST_ROW_CACHE) #the cache should contain something
@@ -1912,7 +1919,7 @@ def test_permanent_matrix_with_swapped_rows_cols(N=12):
     print( 'row_col_swapped_matrix exact permanent:', calc_permanent_rysers(row_col_swapped_matrix))
 
 # @profile
-def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None):
+def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None, exact_log_Z=None):
     '''
     Find the sum of the top k assignments and compare with the trivial bound
     on the remaining assignments of (N!-k)*(the kth best assignment)
@@ -1920,16 +1927,19 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None):
     - N: use a random cost matrix of size (NxN)
     - iters: number of random problems to solve and check
     '''
-    if matrix is None:
-        matrix = np.random.rand(N,N)
-        for row in range(N):
-            for col in range(N):
-                if matrix[row][col] < .5:
-                    matrix[row][col] = matrix[row][col] ** 1
-                    # matrix[row][col] = 0
-                else:
-                    matrix[row][col] = 1 - (1 - matrix[row][col])**1
-                    # matrix[row][col] = 1
+    # if matrix is None:
+    #     matrix = np.random.rand(N,N)
+    #     for row in range(N):
+    #         for col in range(N):
+    #             if matrix[row][col] < .5:
+    #                 matrix[row][col] = matrix[row][col] ** 1
+    #                 # matrix[row][col] = 0
+    #             else:
+    #                 matrix[row][col] = 1 - (1 - matrix[row][col])**1
+    #                 # matrix[row][col] = 1
+
+    matrix, exact_permanent = create_diagonal2(N=N, k=10, zero_one=False)
+    exact_log_Z = np.log(exact_permanent)                   
     # print(("matrix:", matrix))
     all_samples_of_log_Z = []
     node_count_plus_heap_sizes_list = []
@@ -1938,10 +1948,14 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None):
     all_sampled_associations = []
     wall_time = 0
     for test_iter in range(iters):
-        if test_iter % 1000 == 0:
+        if test_iter % 1 == 0:
             print "completed", test_iter, "iters"
         t1 = time.time()
-        sampled_association, sample_of_logZ = sample_log_permanent_with_gumbels(matrix)
+        if test_iter == 0:
+            sampled_association, sample_of_logZ = sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix=True)
+        else:
+            sampled_association, sample_of_logZ = sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix=False)
+
         t2 = time.time()
         runtimes_list.append(t2-t1)
         all_sampled_associations.append(sampled_association)
@@ -1955,7 +1969,7 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None):
     print( "len(node_count_plus_heap_sizes_list) =", len(node_count_plus_heap_sizes_list))
     print( "wall_time =", wall_time)
     log_Z_estimate = np.mean(all_samples_of_log_Z)
-    return number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z
+    return number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, exact_log_Z
 
 
 def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for_each_n.pickle'], pickle_file_paths2=None):
@@ -1976,8 +1990,8 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
             all_n_vals.extend([n for i in range(len(number_of_times_partition_called_list))])
             all_run_time_vals.extend(runtimes_list)
             all_number_of_times_partition_called_vals.extend(number_of_times_partition_called_list)
-            n_vals_mean.append(math.log(n))
-            # n_vals_mean.append(n)
+            # n_vals_mean.append(math.log(n))
+            n_vals_mean.append(n)
             run_time_vals_mean.append(math.log(np.mean(runtimes_list)))
             # run_time_vals_mean.append(np.mean(runtimes_list))
             number_of_times_partition_called_vals_mean.append(math.log(np.mean(number_of_times_partition_called_list)))
@@ -2639,7 +2653,196 @@ def test_max_proposal_probability_error(N):
 def blockPrint():
     sys.stdout = open(os.devnull, 'w')
 
+def create_diagonal(in_matrix, n):
+    '''
+    create diag_matrix, a diagonal matrix with n copies of in_matrix on it's diagonal 
+    Inputs:
+    - in_matrix: numpy array,
+    - n: int, 
+
+    Ouputs:
+    - diag_matrix: numpy array, the array we created with shape of 
+        in_matrix.shape[0]*n X in_matrix.shape[1]*n
+    '''    
+    in_matrix_exact_permanent = calc_permanent_rysers(in_matrix)
+    diag_matrix_permanent = in_matrix_exact_permanent**n 
+    diag_matrix = np.zeros((in_matrix.shape[0]*n, in_matrix.shape[1]*n))
+    print diag_matrix.shape
+    for i in range(n):
+        diag_matrix[i*in_matrix.shape[0]:(i+1)*in_matrix.shape[0], \
+                    i*in_matrix.shape[1]:(i+1)*in_matrix.shape[1]] = in_matrix
+    return diag_matrix, diag_matrix_permanent
+
+def create_diagonal2(N, k, zero_one=False):
+    '''
+    create NxN matrix with blocks on the diagonal of size at most kxk
+    '''    
+    diag_matrix = np.zeros((N, N))
+    diag_matrix_permanent = 1.0
+    print diag_matrix.shape
+    for i in range(N): #only has to go up to the number of blocks
+        if N > k:
+            cur_block = np.random.rand(k,k)
+            if zero_one:
+                for row in range(k):
+                    for col in range(k):
+                        if cur_block[row][col] < .1:
+                            cur_block[row][col] = 0
+                        else:
+                            cur_block[row][col] = 1
+
+            cur_block_exact_permanent = calc_permanent_rysers(cur_block)
+            diag_matrix_permanent *= cur_block_exact_permanent
+            diag_matrix[i*k:(i+1)*k, \
+                        i*k:(i+1)*k] = cur_block
+            N -= k
+        else:
+            cur_block = np.random.rand(N,N)
+            if zero_one:            
+                for row in range(N):
+                    for col in range(N):
+                        if cur_block[row][col] < .1:
+                            cur_block[row][col] = 0
+                        else:
+                            cur_block[row][col] = 1
+
+            cur_block_exact_permanent = calc_permanent_rysers(cur_block)
+            diag_matrix_permanent *= cur_block_exact_permanent
+            diag_matrix[i*k:, \
+                        i*k:] = cur_block
+            return diag_matrix, diag_matrix_permanent
+
+    
+
+def per(mtx, column, selected, prod, output=False):
+    """
+    Row expansion for the permanent of matrix mtx.
+    The counter column is the current column, 
+    selected is a list of indices of selected rows,
+    and prod accumulates the current product.
+    http://homepages.math.uic.edu/~jan/mcs507f13/permanent.py
+    """
+    if column == mtx.shape[1]:
+        if output:
+            print selected, prod
+        return prod
+    else:
+        result = 0
+        for row in range(mtx.shape[0]):
+            if not row in selected:
+                result = result \
+                + per(mtx, column+1, selected+[row], prod*mtx[row,column])
+        return result
+
+def permanent_check(mat):
+    """
+    Returns the permanent of the matrix mat.
+    http://homepages.math.uic.edu/~jan/mcs507f13/permanent.py
+    """
+    return per(mat, 0, [], 1)
+
+# @cython.boundscheck(False) # turn off bounds-checking for entire function
+# @cython.wraparound(False)
+# @cython.cdivision(True)
+# def permfunc_cython(np.ndarray [double, ndim = 2, mode = 'c'] M):
+#     cdef:
+#         int n = M.shape[0], s=1, i, j
+#         int *f = <int*>malloc(n*sizeof(int))
+#         double *d = <double*>malloc(n*sizeof(double))
+#         double *v = <double*>malloc(n*sizeof(double))
+#         double p = 1, prod
+
+#     for i in range(n):
+#         v[i] = 0.
+#         for j in range(n):
+#             v[i] += M[j,i]
+#         p *= v[i]
+#         f[i] = i
+#         d[i] = 2
+#     j = 0
+#     while (j < n-1):
+#         prod = 1.
+#         for i in range(n):
+#             v[i] -= d[j]*M[j, i]
+#             prod *= v[i]
+#         d[j] = -d[j]
+#         s = -s            
+#         p += s*prod
+#         f[0] = 0
+#         f[j] = f[j+1]
+#         f[j+1] = j+1
+#         j = f[0]
+
+#     free(d)
+#     free(f)
+#     free(v)
+#     return p/pow(2.,(n-1))
+
+def npperm(M):
+    #https://github.com/scipy/scipy/issues/7151    
+    n = M.shape[0]
+    d = np.ones(n)
+    j =  0
+    s = 1
+    f = np.arange(n)
+    v = M.sum(axis=0)
+    p = np.prod(v)
+    while (j < n-1):
+        v -= 2*d[j]*M[j]
+        d[j] = -d[j]
+        s = -s
+        prod = np.prod(v)
+        p += s*prod
+        f[0] = 0
+        f[j] = f[j+1]
+        f[j+1] = j+1
+        j = f[0]
+    return p/2**(n-1) 
+
+def test_create_diagonal():
+    N=11
+    matrix = np.random.rand(N,N)
+    for row in range(N):
+        for col in range(N):
+            if matrix[row][col] < .1:
+                matrix[row][col] = 0
+            else:
+                matrix[row][col] = 1
+
+    diag_matrix, permanent = create_diagonal(matrix, n=2)
+    check_permanent = calc_permanent_rysers(diag_matrix)
+    # check_permanent1 = permanent_check(diag_matrix)
+    # check_permanent1 = permfunc_cython(diag_matrix)
+    check_permanent1 = npperm(diag_matrix)
+    print "permanent - check_permanent =", permanent - check_permanent
+    print "permanent - check_permanent1 =", permanent - check_permanent1
+    print "check_permanent1 - check_permanent =", check_permanent1 - check_permanent 
+    print "check_permanent =", check_permanent
+    print "check_permanent1 =", check_permanent1
+    print "permanent =", permanent
+    assert(permanent == check_permanent), (permanent, check_permanent)
+
+def test_create_diagonal2():
+    N=18
+    diag_matrix, permanent = create_diagonal2(N=N, k=5, zero_one=True)
+    check_permanent = calc_permanent_rysers(diag_matrix)
+    # check_permanent1 = permanent_check(diag_matrix)
+    # check_permanent1 = permfunc_cython(diag_matrix)
+    check_permanent1 = npperm(diag_matrix)
+    print "permanent - check_permanent =", permanent - check_permanent
+    print "permanent - check_permanent1 =", permanent - check_permanent1
+    print "check_permanent1 - check_permanent =", check_permanent1 - check_permanent 
+    print "check_permanent =", check_permanent
+    print "check_permanent1 =", check_permanent1
+    print "permanent =", permanent
+    print diag_matrix
+    assert(permanent == check_permanent), (permanent, check_permanent)    
+ 
+
 if __name__ == "__main__":
+    # test_create_diagonal()
+    # test_create_diagonal2()
+    # sleep(-4)
     # blockPrint()
     # test_sampling_correctness(ITERS=1000000, matrix_to_use='rand')
     # test_sampling_correctness(ITERS=100000, matrix_to_use='rand')
@@ -2671,8 +2874,10 @@ if __name__ == "__main__":
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_newPermUB2_numSamples=%d.pickle' % (ITERS, NUM_SAMPLES)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_newPermUB2_numSamples=%d_pickPartitionOrder.pickle' % (ITERS, NUM_SAMPLES)
     
-    pickle_file_path = './nestingUB_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
-    # pickle_file_path = './nestingUB_number_of_times_partition_called_for_each_n_%diters_01matrix.pickle' % (ITERS)
+    pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters_diagMatrix.pickle' % (ITERS)
+    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+    # pickle_file_path = './nestingUB_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
 
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_origAStar.pickle' % (ITERS)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_singleGumbel_n81plus.pickle' % (ITERS)
@@ -2698,20 +2903,21 @@ if __name__ == "__main__":
  
 
 
-    plot_runtime_vs_N(pickle_file_paths = [pickle_file_path])
-    sleep(3)
+    # plot_runtime_vs_N(pickle_file_paths = [pickle_file_path])
+    # sleep(3)
 
     number_of_times_partition_called_for_each_n = {}
     for N in range(3, 140):
     # for N in range(30, 60):
         print( "N =", N)
-        number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z = test_gumbel_permanent_estimation(N, iters=ITERS, num_samples=NUM_SAMPLES)
-        number_of_times_partition_called_for_each_n[N] = (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list)
+        number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, exact_log_Z = test_gumbel_permanent_estimation(N, iters=ITERS, num_samples=NUM_SAMPLES)
+        number_of_times_partition_called_for_each_n[N] = (runtimes_list, all_samples_of_log_Z, exact_log_Z)
+        # number_of_times_partition_called_for_each_n[N] = (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list)
 
     
-        f = open(pickle_file_path, 'wb')
-        pickle.dump(number_of_times_partition_called_for_each_n, f)
-        f.close() 
+        # f = open(pickle_file_path, 'wb')
+        # pickle.dump(number_of_times_partition_called_for_each_n, f)
+        # f.close() 
 
     sleep(-1)
     N = 40 # cost matrices of size (NxN) 
