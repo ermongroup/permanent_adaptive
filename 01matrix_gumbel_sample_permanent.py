@@ -88,7 +88,7 @@ def sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix):
     #convert 2d array to tuple of tuples
     hashable_matrix = tuple([tuple(row) for row in matrix])
     no_required_cells = ()
-    complete_matrix_permanent_UB = (minc_extended_UB2(matrix) + .001) #add a little for potential computational error, would be nice to make this cleaner
+    complete_matrix_permanent_UB = (minc_extended_UB2(matrix)) #add a little for potential computational error, would be nice to make this cleaner
     matrix_permanent_UBs[no_required_cells] = complete_matrix_permanent_UB
 
 
@@ -189,7 +189,7 @@ def check_bounds_add_up(matrix, prv_required_cells, global_row_indices, global_c
         print "N:", N
         required_cells = tuple(prv_required_cells + [(global_row_indices[best_row_to_partition], global_col_indices[fixed_columns[0]])])
         submatrix_permanent_UB = matrix_permanent_UBs[tuple(required_cells)]
-        # submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix) + .001) #add a little for potential computational error, would be nice to make this cleaner
+        # submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
 
         upper_bound_submatrix_count = submatrix_permanent_UB
         upper_bound_submatrix_count *= matrix[best_row_to_partition, fixed_columns[0]]
@@ -222,7 +222,7 @@ def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, 
     assert(N == matrix.shape[1])
 
     fixed_column_options = list(itertools.permutations(range(N), 1))
-    matrix_UB = (minc_extended_UB2(matrix) + .001)
+    matrix_UB = (minc_extended_UB2(matrix))
     if verbose:
         print "matrix_UB:", matrix_UB
     row_with_smallest_partitioned_UB = None
@@ -233,7 +233,7 @@ def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, 
             cur_submatrix = np.delete(matrix, fixed_columns, 1) #delete columns
             cur_submatrix = np.delete(cur_submatrix, [row], 0) #delete rows
 
-            submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix) + .001) #add a little for potential computational error, would be nice to make this cleaner
+            submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
 
             upper_bound_submatrix_count = submatrix_permanent_UB
             upper_bound_submatrix_count *= matrix[row, fixed_columns[0]]
@@ -248,15 +248,16 @@ def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, 
             print "(partitioned UB)/matrix_UB:", np.sum(proposal_distribution)/matrix_UB
 
     if verbose:
+        print "returning new result"
         print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "matrix_UB =", matrix_UB
-    assert(smallest_partitioned_upper_bound <= matrix_UB)
+
+    if verbose:
+        print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "matrix_UB =", matrix_UB
+    assert(smallest_partitioned_upper_bound <= matrix_UB + .000001), (smallest_partitioned_upper_bound, matrix_UB)
 
     BEST_ROW_CACHE[tuple(prv_required_cells)] = row_with_smallest_partitioned_UB
     # print "BEST_ROW_CACHE:"
     # print BEST_ROW_CACHE
-    if verbose:
-        print "returning new result"
-        print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "matrix_UB =", matrix_UB
 
     return row_with_smallest_partitioned_UB
 
@@ -310,7 +311,7 @@ def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_
         if required_cells in matrix_permanent_UBs:
             submatrix_permanent_UB = matrix_permanent_UBs[required_cells]
         else:
-            submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix) + .001) #add a little for potential computational error, would be nice to make this cleaner
+            submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
             matrix_permanent_UBs[required_cells] = submatrix_permanent_UB
 
         upper_bound_submatrix_count = submatrix_permanent_UB
@@ -402,7 +403,7 @@ def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_
                 for cur_col in range(len(global_col_indices)):
                     cur_required_cells = tuple(list(required_cells) + [(global_row_indices[0], global_col_indices[cur_col])])
                     submatrix_permanent_UB = matrix_permanent_UBs[cur_required_cells]
-                    # submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix) + .001) #add a little for potential computational error, would be nice to make this cleaner
+                    # submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
 
                     upper_bound_submatrix_count = submatrix_permanent_UB
                     upper_bound_submatrix_count *= local_matrix[0, cur_col]
@@ -430,7 +431,7 @@ def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_
                 for cur_col in range(len(global_col_indices)):
                     cur_required_cells = tuple(list(required_cells) + [(global_row_indices[0], global_col_indices[cur_col])])
                     submatrix_permanent_UB = matrix_permanent_UBs[cur_required_cells]
-                    # submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix) + .001) #add a little for potential computational error, would be nice to make this cleaner
+                    # submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
 
                     upper_bound_submatrix_count = submatrix_permanent_UB
                     upper_bound_submatrix_count *= local_matrix[0, cur_col]
@@ -1927,19 +1928,20 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None, exact_lo
     - N: use a random cost matrix of size (NxN)
     - iters: number of random problems to solve and check
     '''
-    # if matrix is None:
-    #     matrix = np.random.rand(N,N)
-    #     for row in range(N):
-    #         for col in range(N):
-    #             if matrix[row][col] < .5:
-    #                 matrix[row][col] = matrix[row][col] ** 1
-    #                 # matrix[row][col] = 0
-    #             else:
-    #                 matrix[row][col] = 1 - (1 - matrix[row][col])**1
-    #                 # matrix[row][col] = 1
+    if matrix is None:
+        matrix = np.random.rand(N,N)
+        for row in range(N):
+            for col in range(N):
+                if matrix[row][col] < .5:
+                    matrix[row][col] = matrix[row][col] ** 1
+                    # matrix[row][col] = 0
+                else:
+                    matrix[row][col] = 1 - (1 - matrix[row][col])**1
+                    # matrix[row][col] = 1
 
-    matrix, exact_permanent = create_diagonal2(N=N, k=10, zero_one=False)
-    exact_log_Z = np.log(exact_permanent)                   
+    # matrix, exact_permanent = create_diagonal2(N=N, k=10, zero_one=False)
+    # exact_log_Z = np.log(exact_permanent) 
+
     # print(("matrix:", matrix))
     all_samples_of_log_Z = []
     node_count_plus_heap_sizes_list = []
@@ -1948,7 +1950,7 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None, exact_lo
     all_sampled_associations = []
     wall_time = 0
     for test_iter in range(iters):
-        if test_iter % 1 == 0:
+        if test_iter % 500 == 0:
             print "completed", test_iter, "iters"
         t1 = time.time()
         if test_iter == 0:
@@ -1974,6 +1976,7 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None, exact_lo
 
 def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for_each_n.pickle'], pickle_file_paths2=None):
     n_vals_mean = []
+    log_n_vals_mean = []
     run_time_vals_mean = []
     number_of_times_partition_called_vals_mean = []
     all_n_vals = []
@@ -1983,33 +1986,52 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
         f = open(pickle_file_path, 'rb')
         number_of_times_partition_called_for_each_n = pickle.load(f)
         f.close()
-
-        for n, (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list) in number_of_times_partition_called_for_each_n.items():
+        # for n, (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list) in number_of_times_partition_called_for_each_n.items():
+        for n, (runtimes_list, all_samples_of_log_Z, exact_log_Z) in number_of_times_partition_called_for_each_n.items():
             if n < 5:
                 continue
-            all_n_vals.extend([n for i in range(len(number_of_times_partition_called_list))])
+            all_n_vals.extend([n for i in range(len(runtimes_list))])
             all_run_time_vals.extend(runtimes_list)
-            all_number_of_times_partition_called_vals.extend(number_of_times_partition_called_list)
-            # n_vals_mean.append(math.log(n))
+            # all_number_of_times_partition_called_vals.extend(number_of_times_partition_called_list)
+            log_n_vals_mean.append(math.log(n))
             n_vals_mean.append(n)
             run_time_vals_mean.append(math.log(np.mean(runtimes_list)))
             # run_time_vals_mean.append(np.mean(runtimes_list))
-            number_of_times_partition_called_vals_mean.append(math.log(np.mean(number_of_times_partition_called_list)))
+            # number_of_times_partition_called_vals_mean.append(math.log(np.mean(number_of_times_partition_called_list)))
             # number_of_times_partition_called_vals_mean.append(np.mean(number_of_times_partition_called_list))
     fig = plt.figure()
     ax = plt.subplot(111)
-    ax.plot(n_vals_mean, run_time_vals_mean, 'r+', label='run_time_vals_mean' , markersize=10)
+    ax.plot(n_vals_mean, run_time_vals_mean, 'r+', label='runtime' , markersize=10)
     # ax.plot(all_n_vals, all_run_time_vals, 'r+', label='run_time_vals_mean' , markersize=10)
-    ax.plot(n_vals_mean, number_of_times_partition_called_vals_mean, 'gx', label='number_of_times_partition_called_vals_mean' , markersize=10)
-    plt.title('permanent sampling scaling')
+
+    # ax.plot(n_vals_mean, number_of_times_partition_called_vals_mean, 'gx', label='number_of_times_partition_called_vals_mean' , markersize=10)
+    plt.title('Runtime Scaling')
     plt.xlabel('N (matrix dimension)')
-    plt.ylabel('')
+    plt.ylabel('log(runtime) (log(seconds))')
     # Put a legend below current axis
     lgd = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -.1),
               fancybox=False, shadow=False, ncol=2, numpoints = 1)
-    # print( 'hi1')
-    # plt.show()
-    # print( 'hi2')
+    fig.savefig('permanent_estimation_scaling_plots_diagMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    # fig.savefig('permanent_estimation_scaling_plots_uniformMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    # fig.savefig('permanent_estimation_scaling_plots_01Matrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    plt.close()
+
+    fig = plt.figure()
+    ax = plt.subplot(111)
+    ax.plot(log_n_vals_mean, run_time_vals_mean, 'r+', label='runtime' , markersize=10)
+    plt.title('Runtime Scaling')
+    plt.xlabel('log(N) (log(matrix dimension))')
+    plt.ylabel('log(runtime) (log(seconds))')
+    # Put a legend below current axis
+    lgd = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -.1),
+              fancybox=False, shadow=False, ncol=2, numpoints = 1)
+    fig.savefig('permanent_estimation_scaling_plots_logN_diagMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    # fig.savefig('permanent_estimation_scaling_plots_logN_uniformMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    # fig.savefig('permanent_estimation_scaling_plots_logN_01Matrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+
+    plt.close()
+
+    return 
 
     POLY_FIT = False #fit with some polynomials
     if POLY_FIT:
@@ -2055,11 +2077,82 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
         # ax.plot(all_n_vals, all_run_time_vals, 'r+', label='run_time_vals_mean' , markersize=10)
         ax.plot(n_vals_mean, number_of_times_partition_called_vals_mean, 'mx', label='number_of_times_partition_called_vals_mean 2' , markersize=10)
 
-    fig.savefig('permanent_estimation_scaling_plots', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    # fig.savefig('permanent_estimation_scaling_plots', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    fig.savefig('permanent_estimation_scaling_plots_diagMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent sampling scaling single gumbel perm UB', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent sampling scaling single gumbel, pick partition order perm UB', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent sampling scaling single gumbel, close to 01 matrix perm UB', bbox_extra_artists=(lgd,), bbox_inches='tight')    
 
+    plt.close()
+
+
+def plot_estimateAndExactPermanent_vs_N(pickle_file_paths=['./number_of_times_partition_called_for_each_n.pickle'], pickle_file_paths2=None):
+    n_vals_mean = []
+    mle_permanent_estimates = []
+    exact_permanents = []
+    upper_bounds  = []
+    lower_bounds = []
+    for pickle_file_path in pickle_file_paths:
+        f = open(pickle_file_path, 'rb')
+        number_of_times_partition_called_for_each_n = pickle.load(f)
+        f.close()
+        # for n, (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list) in number_of_times_partition_called_for_each_n.items():
+        for n, (runtimes_list, all_samples_of_log_Z, exact_log_Z) in number_of_times_partition_called_for_each_n.items():
+            if n < 5:
+                continue
+            n_vals_mean.append(n)
+            cur_permanent_estimate = -np.log(np.mean(np.exp(-np.array(all_samples_of_log_Z))))
+            mle_permanent_estimates.append(cur_permanent_estimate)
+            lower_bounds.append(cur_permanent_estimate-1)
+            upper_bounds.append(cur_permanent_estimate+1)
+            exact_permanents.append(exact_log_Z)
+
+    fig = plt.figure()
+    ax = plt.subplot(111)
+    ax.plot(n_vals_mean, mle_permanent_estimates, 'rx', label='permanent estimates' , markersize=5)
+    ax.plot(n_vals_mean, lower_bounds, 'bo', label='lower bounds' , markersize=2)
+    ax.plot(n_vals_mean, upper_bounds, 'yo', label='upper bounds' , markersize=2)
+    ax.plot(n_vals_mean, exact_permanents, 'g+', label='exact permanents' , markersize=5)
+    plt.title('High Probability Permanent Bounds')
+    plt.xlabel('N (matrix dimension)')
+    plt.ylabel('log(permanent)')
+    # Put a legend below current axis
+    lgd = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -.1),
+              fancybox=False, shadow=False, ncol=2, numpoints = 1)
+
+
+    if pickle_file_paths2 is not None:
+        n_vals_mean = []
+        run_time_vals_mean = []
+        number_of_times_partition_called_vals_mean = []
+        all_n_vals = []
+        all_run_time_vals = []
+        all_number_of_times_partition_called_vals = []
+
+        for pickle_file_path in pickle_file_paths2:
+            f = open(pickle_file_path, 'rb')
+            number_of_times_partition_called_for_each_n = pickle.load(f)
+            f.close()
+
+            for n, (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list) in number_of_times_partition_called_for_each_n.items():
+                if n < 5:
+                    continue
+                all_n_vals.extend([n for i in range(len(number_of_times_partition_called_list))])
+                all_run_time_vals.extend(runtimes_list)
+                all_number_of_times_partition_called_vals.extend(number_of_times_partition_called_list)
+                # n_vals_mean.append(math.log(n))
+                n_vals_mean.append(n)
+                run_time_vals_mean.append(math.log(np.mean(runtimes_list)))
+                # run_time_vals_mean.append(np.mean(runtimes_list))
+                number_of_times_partition_called_vals_mean.append(math.log(np.mean(number_of_times_partition_called_list)))
+                # number_of_times_partition_called_vals_mean.append(np.mean(number_of_times_partition_called_list))
+
+        ax.plot(n_vals_mean, run_time_vals_mean, 'y+', label='run_time_vals_mean 2' , markersize=10)
+        # ax.plot(all_n_vals, all_run_time_vals, 'r+', label='run_time_vals_mean' , markersize=10)
+        ax.plot(n_vals_mean, number_of_times_partition_called_vals_mean, 'mx', label='number_of_times_partition_called_vals_mean 2' , markersize=10)
+
+    # fig.savefig('permanent_estimate_VS_exact_plots', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    fig.savefig('permanent_estimate_VS_exact_plots_diagMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     plt.close()
 
 
@@ -2528,18 +2621,23 @@ def test_total_variation_distance(N=3, tv_ITERS=10):
     print "np.mean(standard_tv_distance_list) =", np.mean(standard_tv_distance_list)
 
 def test_permanent_bound_tightness(N):
-    matrix = np.random.rand(N,N)
-    for row in range(N):
-        for col in range(N):
-            if matrix[row][col] < .5:
-                # matrix[row][col] = matrix[row][col] ** 1
-                matrix[row][col] = 0
-            else:
-                # matrix[row][col] = 1 - (1 - matrix[row][col])**1
-                matrix[row][col] = 1
+    use_diag_matrix = True
+    if use_diag_matrix:
+        matrix, exact_permanent = create_diagonal2(N, k=3, zero_one=False)
 
-    exact_permanent = calc_permanent_rysers(matrix)
-    # exact_permanent = 0
+    else:
+        matrix = np.random.rand(N,N)
+        for row in range(N):
+            for col in range(N):
+                if matrix[row][col] < .5:
+                    # matrix[row][col] = matrix[row][col] ** 1
+                    matrix[row][col] = 0
+                else:
+                    # matrix[row][col] = 1 - (1 - matrix[row][col])**1
+                    matrix[row][col] = 1
+
+        exact_permanent = calc_permanent_rysers(matrix)
+        # exact_permanent = 0
 
     minc2_sub_matrix_min_bound = 0
     row = 0
@@ -2561,8 +2659,8 @@ def test_permanent_bound_tightness(N):
 
     minc_UB2 = minc_extended_UB2(matrix)
     minc_UB2_of_transpose = minc_extended_UB2(np.transpose(matrix))
-    # optimized_minc_extended_upper_bound2 = optimized_minc_extened_UB2(matrix)
-    optimized_minc_extended_upper_bound2 = 0
+    optimized_minc_extended_upper_bound2 = optimized_minc_extened_UB2(matrix)
+    # optimized_minc_extended_upper_bound2 = 0
 
     print 'log(exact_permanent) =', np.log(exact_permanent)
     print 'log extended minc2 UB =', np.log(minc_UB2)
@@ -2840,6 +2938,7 @@ def test_create_diagonal2():
  
 
 if __name__ == "__main__":
+    # test_permanent_bound_tightness(N=20)
     # test_create_diagonal()
     # test_create_diagonal2()
     # sleep(-4)
@@ -2867,16 +2966,17 @@ if __name__ == "__main__":
     # sleep(-1)
 
 
-    ITERS = 5
+    ITERS = 10000
     NUM_SAMPLES = 1
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_newPermUB2_numSamples=%d_close01matrix.pickle' % (ITERS, NUM_SAMPLES)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_newPermUB2_numSamples=%d.pickle' % (ITERS, NUM_SAMPLES)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_newPermUB2_numSamples=%d_pickPartitionOrder.pickle' % (ITERS, NUM_SAMPLES)
     
-    pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters_diagMatrix.pickle' % (ITERS)
+    #cur paper experiments here
+    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters_diagMatrix.pickle' % (ITERS)
     # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
-    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters_01matrix.pickle' % (ITERS)
     # pickle_file_path = './nestingUB_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
 
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_origAStar.pickle' % (ITERS)
@@ -2902,12 +3002,16 @@ if __name__ == "__main__":
     #                                        './number_of_times_partition_called_for_each_n_%diters_newPermUB_n71plus.pickle' % ITERS])
  
 
+    pickle_file_path = './test_pruning_improvement_%diters_uniformMatrix.pickle' % (ITERS)
 
-    # plot_runtime_vs_N(pickle_file_paths = [pickle_file_path])
-    # sleep(3)
+
+    plot_runtime_vs_N(pickle_file_paths = [pickle_file_path])
+    plot_estimateAndExactPermanent_vs_N(pickle_file_paths = [pickle_file_path])
+    sleep(3)
 
     number_of_times_partition_called_for_each_n = {}
-    for N in range(3, 140):
+    for N in [10, 20, 30, 40]:
+    # for N in range(10, 140):
     # for N in range(30, 60):
         print( "N =", N)
         number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, exact_log_Z = test_gumbel_permanent_estimation(N, iters=ITERS, num_samples=NUM_SAMPLES)

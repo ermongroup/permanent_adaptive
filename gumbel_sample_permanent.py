@@ -19,6 +19,8 @@ import pickle
 import numba as nb
 import scipy
 import scipy.stats
+# from 01matrix_gumbel_sample_permanent import create_diagonal2
+
 # sys.path.insert(0, '/Users/jkuck/research/atlas_AAAI_2017/refactored_multi_model/')
 # from permanent_model import compute_gumbel_upper_bound, approx_permanent3
 # from boundZ import calculate_gumbel_slack
@@ -63,7 +65,9 @@ def sample_log_permanent_with_gumbels(cost_matrix, num_samples=1, min_sum=None):
     '''
     for i in range(cost_matrix.shape[0]):
         for j in range(cost_matrix.shape[1]):
-            assert(sys.maxint > cost_matrix[i][j])
+            if sys.maxint < cost_matrix[i][j]:
+                cost_matrix[i][j] = sys.maxint
+            # assert(sys.maxint > cost_matrix[i][j])
 
     init_node = Node(cost_matrix, [], [], 0, gumbel_truncation=np.inf)
 
@@ -503,7 +507,7 @@ class Node:
 
         #we will transform the cost matrix into the "remaining cost matrix" as described in [1]
         self.remaining_cost_matrix = self.construct_remaining_cost_matrix()
-        assert((self.remaining_cost_matrix > 0).all()), self.remaining_cost_matrix
+        assert((self.remaining_cost_matrix > -.000000001).all()), self.remaining_cost_matrix
         #solve the assignment problem for the remaining cost matrix
 
         if ASSIGNMENT_SOLVER == 'munkres':
@@ -530,6 +534,8 @@ class Node:
 
         #compute the minimum cost assignment for the node
         self.minimum_cost = 0
+        # print "self.remaining_cost_matrix.shape:", self.remaining_cost_matrix.shape
+        # print "association_list:", association_list
         for (row,col) in association_list:
 #            print( 'a', self.minimum_cost, type(self.minimum_cost))
 #            print( 'b', self.remaining_cost_matrix[row][col], type(self.remaining_cost_matrix[row][col]))
@@ -549,7 +555,7 @@ class Node:
 
         TEST_SUBMATRIX_BOUND1 = False
         TEST_SUBMATRIX_BOUND2 = False
-        TEST_SUBMATRIX_BOUND3 = True
+        TEST_SUBMATRIX_BOUND3 = False
 
         # if TEST_SUBMATRIX_BOUND1:
         #     #test out using an upper bound on the permanent for the submatrix
@@ -807,12 +813,14 @@ class Node:
             for row, col in self.required_cells:
                 self.log_minc_extended_upper_bound2 -= self.orig_cost_matrix[row][col]
             if USE_1_GUMBEL:
-                # pass #use origina A star bound
+                pass #use original A star bound
+
                 #use the log_minc_extended_upper_bound2 permanent upper bound for this submatrix
                 # self.upper_bound_gumbel_perturbed_state = self.log_minc_extended_upper_bound2 + self.max_gumbel_1
-                exact_permanent = calc_permanent_rysers(sub_matrix)
+                
                 #test using exact permanent as upper bound
-                self.upper_bound_gumbel_perturbed_state = np.log(exact_permanent) + self.max_gumbel_1
+                # exact_permanent = calc_permanent_rysers(sub_matrix)
+                # self.upper_bound_gumbel_perturbed_state = np.log(exact_permanent) + self.max_gumbel_1
 
             else:
                 self.upper_bound_gumbel_perturbed_state = self.log_minc_extended_upper_bound2 + truncated_gumbel(n=1, truncation=gumbel_truncation)
@@ -1723,7 +1731,7 @@ def test_permanent_matrix_with_swapped_rows_cols(N=12):
     print( 'row_col_swapped_matrix exact permanent:', calc_permanent_rysers(row_col_swapped_matrix))
 
 # @profile
-def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None):
+def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None, exact_log_Z=None):
     '''
     Find the sum of the top k assignments and compare with the trivial bound
     on the remaining assignments of (N!-k)*(the kth best assignment)
@@ -1736,9 +1744,16 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None):
         for row in range(N):
             for col in range(N):
                 if matrix[row][col] < .5:
-                    matrix[row][col] = matrix[row][col] ** 1
+                    # matrix[row][col] = matrix[row][col] ** 1
+                    matrix[row][col] = 0
                 else:
-                    matrix[row][col] = 1 - (1 - matrix[row][col])**1
+                    # matrix[row][col] = 1 - (1 - matrix[row][col])**1
+                    matrix[row][col] = 1
+
+    # matrix, exact_permanent = create_diagonal2(N=N, k=10, zero_one=False)
+    # exact_log_Z = np.log(exact_permanent) 
+
+
     # print(("matrix:", matrix))
     cost_matrix = -np.log(matrix)
     all_samples_of_log_Z = []
@@ -1748,7 +1763,7 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None):
     all_sampled_associations = []
     wall_time = 0
     for test_iter in range(iters):
-        print test_iter
+        # print test_iter
         if test_iter % 1000 == 0:
             print "completed", test_iter, "iters"
         t1 = time.time()
@@ -1772,7 +1787,7 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None):
     print( "len(node_count_plus_heap_sizes_list) =", len(node_count_plus_heap_sizes_list))
 
     log_Z_estimate = np.mean(all_samples_of_log_Z)
-    return number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z
+    return number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, exact_log_Z
 
 
 def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for_each_n.pickle'], pickle_file_paths2=None):
@@ -2448,6 +2463,45 @@ def test_max_proposal_probability_error(N):
     print "max_true_prob/min_proposal_prob =", max_true_prob/min_proposal_prob
     print "max_proposal_error_ratio =", max_proposal_error_ratio
 
+def create_diagonal2(N, k, zero_one=False):
+    '''
+    create NxN matrix with blocks on the diagonal of size at most kxk
+    '''    
+    diag_matrix = np.zeros((N, N))
+    diag_matrix_permanent = 1.0
+    print diag_matrix.shape
+    for i in range(N): #only has to go up to the number of blocks
+        if N > k:
+            cur_block = np.random.rand(k,k)
+            if zero_one:
+                for row in range(k):
+                    for col in range(k):
+                        if cur_block[row][col] < .1:
+                            cur_block[row][col] = 0
+                        else:
+                            cur_block[row][col] = 1
+
+            cur_block_exact_permanent = calc_permanent_rysers(cur_block)
+            diag_matrix_permanent *= cur_block_exact_permanent
+            diag_matrix[i*k:(i+1)*k, \
+                        i*k:(i+1)*k] = cur_block
+            N -= k
+        else:
+            cur_block = np.random.rand(N,N)
+            if zero_one:            
+                for row in range(N):
+                    for col in range(N):
+                        if cur_block[row][col] < .1:
+                            cur_block[row][col] = 0
+                        else:
+                            cur_block[row][col] = 1
+
+            cur_block_exact_permanent = calc_permanent_rysers(cur_block)
+            diag_matrix_permanent *= cur_block_exact_permanent
+            diag_matrix[i*k:, \
+                        i*k:] = cur_block
+            return diag_matrix, diag_matrix_permanent
+
 
 if __name__ == "__main__":
     # test_max_proposal_probability_error(6)
@@ -2455,18 +2509,18 @@ if __name__ == "__main__":
 
     # test_gumbel_mean_concentration(samples=1000)
     # sleep(-4)
-    test_permanent_bound_tightness(N=20)   
-    exit(0)
+    # test_permanent_bound_tightness(N=20)   
+    # exit(0)
     # test_total_variation_distance()
     # test_sampling_correctness(ITERS=100000, matrix_to_use='rand')
-    # test_sampling_correctness(ITERS=10000000, matrix_to_use='rand')
+    # test_sampling_correctness(ITERS=100000, matrix_to_use='rand')
     # report_test_sampling_correctness_from_pickle(ITERS=100000, matrix_to_use='rand')
     # sleep(-2)
     # test_optimized_minc(z=1/6, N=16)
     # test_sub_permanant_differences(N=100)
 
-    test_logZ_error(N=12, ITERS=100, matrix_to_use='rand')
-    sleep(-1)
+    # test_logZ_error(N=12, ITERS=100, matrix_to_use='rand')
+    # sleep(-1)
 
 
     ITERS = 5
@@ -2476,7 +2530,10 @@ if __name__ == "__main__":
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_newPermUB2_numSamples=%d.pickle' % (ITERS, NUM_SAMPLES)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_newPermUB2_numSamples=%d_pickPartitionOrder.pickle' % (ITERS, NUM_SAMPLES)
     
-    pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_origAStar.pickle' % (ITERS)
+    # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_origAStar_diagMatrix.pickle' % (ITERS)
+    # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_origAStar.pickle' % (ITERS)
+    pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_origAStar_01matrix.pickle' % (ITERS)
+
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_singleGumbel_n81plus.pickle' % (ITERS)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_singleGumbel_pickPartitionOrder.pickle' % (ITERS)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_singleGumbel_close01matrix.pickle' % (ITERS)
@@ -2505,13 +2562,15 @@ if __name__ == "__main__":
     for N in range(5, 140):
     # for N in range(30, 60):
         print( "N =", N)
-        number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z = test_gumbel_permanent_estimation(N, iters=ITERS, num_samples=NUM_SAMPLES)
-        number_of_times_partition_called_for_each_n[N] = (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list)
+        number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, exact_log_Z = test_gumbel_permanent_estimation(N, iters=ITERS, num_samples=NUM_SAMPLES)
+        number_of_times_partition_called_for_each_n[N] = (runtimes_list, all_samples_of_log_Z, exact_log_Z)
+        
+        # number_of_times_partition_called_for_each_n[N] = (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list)
 
     
-        # f = open(pickle_file_path, 'wb')
-        # pickle.dump(number_of_times_partition_called_for_each_n, f)
-        # f.close() 
+        f = open(pickle_file_path, 'wb')
+        pickle.dump(number_of_times_partition_called_for_each_n, f)
+        f.close() 
 
     sleep(-1)
     N = 40 # cost matrices of size (NxN) 
