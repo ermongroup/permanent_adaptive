@@ -3269,10 +3269,9 @@ if __name__ == "__main__":
 
     # matrix_filename = "./networkrepository_data/smaller_networks/ENZYMES_g220.edges"
 
-
-
-    matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g230.edges"
-    # matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g479.edges"
+    # matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g192.edges"
+    # matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g230.edges"
+    matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g479.edges"
     # matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g490.edges"
 
 
