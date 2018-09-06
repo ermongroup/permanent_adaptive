@@ -19,8 +19,10 @@ import pickle
 import numba as nb
 import scipy
 import scipy.stats
+import scipy.io
 import copy
 import os
+import networkx as nx
 # from libc.stdlib cimport malloc, free
 # from libc.math cimport pow
 
@@ -44,6 +46,7 @@ DEBUG1 = False
 FIRST_GUMBEL_LARGER = []
 BEST_ROW_CACHE={}
 matrix_permanent_UBs = {}
+COMPARE_WAI = False
 #
 #
 #References:
@@ -54,7 +57,7 @@ matrix_permanent_UBs = {}
 #     tracking and motion correspondence," IEEE Trans. Aerosp. Electron. Syst., vol. 31, no. 1, pp.
 #     486-489, Jan. 1995.
 
-
+# @profile
 def sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix):
     '''
 
@@ -122,7 +125,8 @@ def sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix):
 
     sample_of_logZ = cur_sampled_gumbel - np.euler_gamma#weight is 1, so ln(weight) = ln(1) = 0
     # sampled_association = correct_sampled_association_indices(sampled_association)
-    return (sampled_association, sample_of_logZ)
+    cur_permanentUB = matrix_permanent_UBs[no_required_cells]
+    return (sampled_association, sample_of_logZ, cur_permanentUB)
 
 def correct_sampled_association_indices(incorrect_sampled_association):
     used_cols = defaultdict(int)
@@ -198,8 +202,113 @@ def check_bounds_add_up(matrix, prv_required_cells, global_row_indices, global_c
     cur_partitioned_UB = np.sum(proposal_distribution)
     assert(np.abs(cur_partitioned_UB - matrix_UB) < .001), (cur_partitioned_UB, matrix_UB)
 
+# @profile
+def minc_extended_UB2_excludeRowCol(matrix, excluded_row, excluded_col):
+    #another bound
+    #https://ac-els-cdn-com.stanford.idm.oclc.org/S002437950400299X/1-s2.0-S002437950400299X-main.pdf?_tid=fa4d00ee-39a5-4030-b7c1-28bb5fbc76c0&acdnat=1534454814_a7411b3006e0e092622de35cbf015275
+    # equation (6), U^M(A)
+
+    assert(matrix.shape[0] == matrix.shape[1])
+    N = matrix.shape[0]
+
+    minc_extended_upper_bound2 = 1.0
+    for row in range(N):
+        if row == excluded_row:
+            continue
+        sorted_row = sorted(zip(matrix[row], range(N)), reverse=True)
+        row_sum = 0
+        delta_idx = 0
+        for col in range(N):
+            if sorted_row[col][1] == excluded_col:
+                continue
+            row_sum += sorted_row[col][0] * delta(delta_idx+1)
+            delta_idx += 1
+            # row_sum += sorted_row[col][0] * numba_delta(col+1)
+        minc_extended_upper_bound2 *= row_sum
+    return minc_extended_upper_bound2
+
+# @profile
+def find_best_row_to_partition_matrix_faster(matrix, prv_required_cells, first_sample, permanentUB, verbose=False):
+    if COMPARE_WAI:
+        return 0
+    N = matrix.shape[0]
+    assert(N == matrix.shape[1])
+    global BEST_ROW_CACHE
+    # print "BEST_ROW_CACHE:"
+    # print BEST_ROW_CACHE
+    
+    if first_sample and len(prv_required_cells) == 0:
+        pass
+        # BEST_ROW_CACHE = {} #clear the cache, new matrix
+        # print "cache cleared!!"
+    else:
+        assert(len(BEST_ROW_CACHE)>0), (first_sample, len(prv_required_cells), BEST_ROW_CACHE) #the cache should contain something
+
+    if tuple(prv_required_cells) in BEST_ROW_CACHE:
+        if verbose:
+            print "returning cached result"
+        # print "smallest_partitioned_upper_bound =", BEST_ROW_CACHE[tuple(prv_required_cells)]
+
+        return BEST_ROW_CACHE[tuple(prv_required_cells)]
+
+
+    #check if first row is valid
+    proposal_distribution = []
+    for col in range(N):
+        submatrix_permanent_UB = minc_extended_UB2_excludeRowCol(matrix, excluded_row=0, excluded_col=col) 
+        # print row, col, submatrix_permanent_UB
+        upper_bound_submatrix_count = submatrix_permanent_UB
+        upper_bound_submatrix_count *= matrix[0, col]
+
+        proposal_distribution.append(upper_bound_submatrix_count)
+    first_row_partitioned_UB = np.sum(proposal_distribution)
+    if first_row_partitioned_UB < permanentUB:
+        BEST_ROW_CACHE[tuple(prv_required_cells)] = 0    
+        return 0
+
+
+
+    # permanentUB = (minc_extended_UB2(matrix))
+    if verbose:
+        print "find_best_row_to_partition_matrix_fast", '*'*80
+        print "permanentUB:", permanentUB
+    row_with_smallest_partitioned_UB = None
+    smallest_partitioned_upper_bound = None
+    for row in range(N):
+        proposal_distribution = []
+        for col in range(N):
+            submatrix_permanent_UB = minc_extended_UB2_excludeRowCol(matrix, excluded_row=row, excluded_col=col) 
+            # print row, col, submatrix_permanent_UB
+            upper_bound_submatrix_count = submatrix_permanent_UB
+            upper_bound_submatrix_count *= matrix[row, col]
+
+            proposal_distribution.append(upper_bound_submatrix_count)
+        cur_partitioned_UB = np.sum(proposal_distribution)
+        if smallest_partitioned_upper_bound is None or cur_partitioned_UB < smallest_partitioned_upper_bound:
+            smallest_partitioned_upper_bound = cur_partitioned_UB
+            row_with_smallest_partitioned_UB = row
+        if verbose:
+            print "partitioned UB:", np.sum(proposal_distribution)
+            print "(partitioned UB)/permanentUB:", np.sum(proposal_distribution)/permanentUB
+        # assert(np.sum(proposal_distribution)/permanentUB < 1), (np.sum(proposal_distribution), permanentUB, matrix)
+
+    if verbose:
+        print "returning new result"
+        print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "permanentUB =", permanentUB
+
+    if verbose:
+        print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "permanentUB =", permanentUB
+    assert(smallest_partitioned_upper_bound <= permanentUB + .000001), (smallest_partitioned_upper_bound, permanentUB)
+
+    BEST_ROW_CACHE[tuple(prv_required_cells)] = row_with_smallest_partitioned_UB
+    # print "BEST_ROW_CACHE:"
+    # print BEST_ROW_CACHE
+
+    return row_with_smallest_partitioned_UB
+
 
 def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, verbose=False):
+    # return 0
     global BEST_ROW_CACHE
     # print "BEST_ROW_CACHE:"
     # print BEST_ROW_CACHE
@@ -224,6 +333,7 @@ def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, 
     fixed_column_options = list(itertools.permutations(range(N), 1))
     matrix_UB = (minc_extended_UB2(matrix))
     if verbose:
+        print "find_best_row_to_partition_matrix", '*'*80        
         print "matrix_UB:", matrix_UB
     row_with_smallest_partitioned_UB = None
     smallest_partitioned_upper_bound = None
@@ -234,6 +344,7 @@ def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, 
             cur_submatrix = np.delete(cur_submatrix, [row], 0) #delete rows
 
             submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
+            # print row, fixed_columns, submatrix_permanent_UB
 
             upper_bound_submatrix_count = submatrix_permanent_UB
             upper_bound_submatrix_count *= matrix[row, fixed_columns[0]]
@@ -246,6 +357,7 @@ def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, 
         if verbose:
             print "partitioned UB:", np.sum(proposal_distribution)
             print "(partitioned UB)/matrix_UB:", np.sum(proposal_distribution)/matrix_UB
+        # assert(np.sum(proposal_distribution)/matrix_UB < 1), (np.sum(proposal_distribution), matrix_UB, matrix)
 
     if verbose:
         print "returning new result"
@@ -281,7 +393,9 @@ def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_
     fixed_column_options = list(itertools.permutations(range(N), depth))
     
     prv_required_cells_copy = copy.copy(prv_required_cells)
-    best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, prv_required_cells_copy, first_sample)
+    # best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, prv_required_cells_copy, first_sample)
+    best_row_to_partition = find_best_row_to_partition_matrix_faster(local_matrix, prv_required_cells_copy, first_sample, permanentUB)
+
     #swap rows
     # temp_row = np.copy(local_matrix[0])
     # local_matrix[0] = local_matrix[best_row_to_partition]
@@ -312,11 +426,19 @@ def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_
             submatrix_permanent_UB = matrix_permanent_UBs[required_cells]
         else:
             submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
+            assert(submatrix_permanent_UB > -.000000001)
+            if submatrix_permanent_UB < 0:
+                submatrix_permanent_UB = 0
+           
             matrix_permanent_UBs[required_cells] = submatrix_permanent_UB
+        
+        
 
+        # print submatrix_permanent_UB
         upper_bound_submatrix_count = submatrix_permanent_UB
         for row in range(depth):
             upper_bound_submatrix_count *= local_matrix[row, fixed_columns[row]]
+        assert(submatrix_permanent_UB >= 0), submatrix_permanent_UB
         proposal_distribution.append(upper_bound_submatrix_count)
         if DEBUG1:
             print upper_bound_submatrix_count,
@@ -364,6 +486,10 @@ def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_
             # print
             check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
             matrix_permanent_UBs[tuple(prv_required_cells)] -= cur_level_slack #+ sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]#sub_tree_slack            
+            assert(matrix_permanent_UBs[tuple(prv_required_cells)] > -.000000001)
+            if matrix_permanent_UBs[tuple(prv_required_cells)] < 0:
+                matrix_permanent_UBs[tuple(prv_required_cells)] = 0
+            
             check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
             
             return sampled_association, cur_level_slack
@@ -381,6 +507,10 @@ def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_
             # print "sampled_submatrix:", sampled_submatrix
             if sampled_submatrix.shape[0] == 0:
                 matrix_permanent_UBs[tuple(prv_required_cells)] -= cur_level_slack
+                assert(matrix_permanent_UBs[tuple(prv_required_cells)] > -.000000001)
+                if matrix_permanent_UBs[tuple(prv_required_cells)] < 0:
+                    matrix_permanent_UBs[tuple(prv_required_cells)] = 0
+
                 return sampled_association_global_indices, cur_level_slack
             prv_required_cells_copy.extend(sampled_association_global_indices)
             global_row_indices = np.delete(global_row_indices, range(depth))
@@ -422,6 +552,9 @@ def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_
             # print "prv_required_cells:", prv_required_cells
             check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
             matrix_permanent_UBs[tuple(prv_required_cells)] -= cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]#sub_tree_slack
+            assert(matrix_permanent_UBs[tuple(prv_required_cells)] > -.000000001)
+            if matrix_permanent_UBs[tuple(prv_required_cells)] < 0:
+                matrix_permanent_UBs[tuple(prv_required_cells)] = 0
             check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
 
             #begin debug
@@ -557,6 +690,9 @@ def minc_extended_UB2(matrix):
     #https://ac-els-cdn-com.stanford.idm.oclc.org/S002437950400299X/1-s2.0-S002437950400299X-main.pdf?_tid=fa4d00ee-39a5-4030-b7c1-28bb5fbc76c0&acdnat=1534454814_a7411b3006e0e092622de35cbf015275
     # equation (6), U^M(A)
 
+    if COMPARE_WAI:
+        return immediate_nesting_extended_bregman(matrix)
+
     assert(matrix.shape[0] == matrix.shape[1])
     N = matrix.shape[0]
 
@@ -633,6 +769,31 @@ def optimized_minc_extened_UB2(matrix):
     assert((result.x>0).all()), (result.x, optimzed_upper_bound)
     print ("result.x =", result.x, "optimzed_upper_bound =", optimzed_upper_bound)
     return optimzed_upper_bound
+
+def h_func(r):
+    if r >= 1:
+        return r + .5*math.log(r) + np.e - 1
+    else:
+        return 1 + (np.e - 1)*r
+
+# @profile
+def immediate_nesting_extended_bregman(matrix):
+    #https://dukespace.lib.duke.edu/dspace/bitstream/handle/10161/1054/D_Law_Wai_a_200904.pdf?sequence=1&isAllowed=y
+
+
+    assert((matrix <= 1).all())
+    assert((matrix >= 0).all())
+    N = matrix.shape[0]
+    assert(N == matrix.shape[1])
+    bregman_extended_upper_bound = 1
+    for col in range(N):
+        col_sum = 0
+        for row in range(N):
+            col_sum += matrix[row][col]
+
+        bregman_extended_upper_bound *= h_func(col_sum)/np.e
+
+    return bregman_extended_upper_bound
 
 class Node:
     # @profile
@@ -1920,7 +2081,7 @@ def test_permanent_matrix_with_swapped_rows_cols(N=12):
     print( 'row_col_swapped_matrix exact permanent:', calc_permanent_rysers(row_col_swapped_matrix))
 
 # @profile
-def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None, exact_log_Z=None):
+def test_gumbel_permanent_estimation(N,iters,num_samples=1, exact_log_Z=None, matrix=None, use_matrix=False):
     '''
     Find the sum of the top k assignments and compare with the trivial bound
     on the remaining assignments of (N!-k)*(the kth best assignment)
@@ -1928,19 +2089,20 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None, exact_lo
     - N: use a random cost matrix of size (NxN)
     - iters: number of random problems to solve and check
     '''
-    if matrix is None:
-        matrix = np.random.rand(N,N)
-        for row in range(N):
-            for col in range(N):
-                if matrix[row][col] < .5:
-                    matrix[row][col] = matrix[row][col] ** 1
-                    # matrix[row][col] = 0
-                else:
-                    matrix[row][col] = 1 - (1 - matrix[row][col])**1
-                    # matrix[row][col] = 1
+    if use_matrix == False:
+        # if matrix is None:
+        #     matrix = np.random.rand(N,N)
+        #     for row in range(N):
+        #         for col in range(N):
+        #             if matrix[row][col] < .5:
+        #                 matrix[row][col] = matrix[row][col] ** 1
+        #                 # matrix[row][col] = 0
+        #             else:
+        #                 matrix[row][col] = 1 - (1 - matrix[row][col])**1
+        #                 # matrix[row][col] = 1
 
-    # matrix, exact_permanent = create_diagonal2(N=N, k=10, zero_one=False)
-    # exact_log_Z = np.log(exact_permanent) 
+        matrix, exact_permanent = create_diagonal2(N=N, k=10, zero_one=False)
+        exact_log_Z = np.log(exact_permanent) 
 
     # print(("matrix:", matrix))
     all_samples_of_log_Z = []
@@ -1949,14 +2111,16 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None, exact_lo
     runtimes_list = []
     all_sampled_associations = []
     wall_time = 0
+    #track the upper bound through iterations as we prune slack
+    permanent_UBs = []
     for test_iter in range(iters):
-        if test_iter % 500 == 0:
+        if test_iter % 1 == 0:
             print "completed", test_iter, "iters"
         t1 = time.time()
         if test_iter == 0:
-            sampled_association, sample_of_logZ = sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix=True)
+            sampled_association, sample_of_logZ, cur_permanentUB = sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix=True)
         else:
-            sampled_association, sample_of_logZ = sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix=False)
+            sampled_association, sample_of_logZ, cur_permanentUB = sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix=False)
 
         t2 = time.time()
         runtimes_list.append(t2-t1)
@@ -1964,6 +2128,7 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None, exact_lo
         cur_wall_time = t2-t1
         wall_time += cur_wall_time
         all_samples_of_log_Z.append(sample_of_logZ)
+        permanent_UBs.append(cur_permanentUB)
     print()
     # print( "exact log(permanent):", np.log(calc_permanent_rysers(matrix)))
     print( "np.mean(all_samples_of_log_Z) =", np.mean(all_samples_of_log_Z))
@@ -1971,38 +2136,60 @@ def test_gumbel_permanent_estimation(N,iters,num_samples=1,matrix=None, exact_lo
     print( "len(node_count_plus_heap_sizes_list) =", len(node_count_plus_heap_sizes_list))
     print( "wall_time =", wall_time)
     log_Z_estimate = np.mean(all_samples_of_log_Z)
-    return number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, exact_log_Z
+    return number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, exact_log_Z, permanent_UBs
 
 
-def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for_each_n.pickle'], pickle_file_paths2=None):
-    n_vals_mean = []
-    log_n_vals_mean = []
-    run_time_vals_mean = []
+def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for_each_n.pickle'], pickle_file_paths2=None,\
+                      plot_filename=None):
+    n_vals_mean1 = []
+    log_n_vals_mean1 = []
+    run_time_vals_mean1 = []
     number_of_times_partition_called_vals_mean = []
-    all_n_vals = []
-    all_run_time_vals = []
+    all_n_vals1 = []
+    all_run_time_vals1 = []
     all_number_of_times_partition_called_vals = []
     for pickle_file_path in pickle_file_paths:
         f = open(pickle_file_path, 'rb')
         number_of_times_partition_called_for_each_n = pickle.load(f)
         f.close()
         # for n, (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list) in number_of_times_partition_called_for_each_n.items():
-        for n, (runtimes_list, all_samples_of_log_Z, exact_log_Z) in number_of_times_partition_called_for_each_n.items():
+        for n, (runtimes_list, all_samples_of_log_Z, exact_log_Z, permanent_UBs) in number_of_times_partition_called_for_each_n.items():
             if n < 5:
                 continue
-            all_n_vals.extend([n for i in range(len(runtimes_list))])
-            all_run_time_vals.extend(runtimes_list)
+            all_n_vals1.extend([n for i in range(len(runtimes_list))])
+            all_run_time_vals1.extend(runtimes_list)
             # all_number_of_times_partition_called_vals.extend(number_of_times_partition_called_list)
-            log_n_vals_mean.append(math.log(n))
-            n_vals_mean.append(n)
-            run_time_vals_mean.append(math.log(np.mean(runtimes_list)))
-            # run_time_vals_mean.append(np.mean(runtimes_list))
+            log_n_vals_mean1.append(math.log(n))
+            n_vals_mean1.append(n)
+            run_time_vals_mean1.append(math.log(np.mean(runtimes_list)))
+            # run_time_vals_mean1.append(np.mean(runtimes_list))
             # number_of_times_partition_called_vals_mean.append(math.log(np.mean(number_of_times_partition_called_list)))
             # number_of_times_partition_called_vals_mean.append(np.mean(number_of_times_partition_called_list))
     fig = plt.figure()
     ax = plt.subplot(111)
-    ax.plot(n_vals_mean, run_time_vals_mean, 'r+', label='runtime' , markersize=10)
-    # ax.plot(all_n_vals, all_run_time_vals, 'r+', label='run_time_vals_mean' , markersize=10)
+    ax.plot(n_vals_mean1, run_time_vals_mean1, 'r+', label='runtime' , markersize=10)
+    # ax.plot(all_n_vals1, all_run_time_vals1, 'r+', label='run_time_vals_mean' , markersize=10)
+
+    if pickle_file_paths2 is not None:
+        n_vals_mean2 = []
+        run_time_vals_mean2 = []
+        log_n_vals_mean2 = []
+
+        for pickle_file_path in pickle_file_paths2:
+            f = open(pickle_file_path, 'rb')
+            number_of_times_partition_called_for_each_n = pickle.load(f)
+            f.close()
+
+            for n, (runtimes_list, all_samples_of_log_Z, exact_log_Z, permanent_UBs) in number_of_times_partition_called_for_each_n.items():
+                if n < 5:
+                    continue
+                n_vals_mean2.append(n)
+                log_n_vals_mean2.append(math.log(n))
+                run_time_vals_mean2.append(math.log(np.mean(runtimes_list)))
+                # run_time_vals_mean2.append(np.mean(runtimes_list))
+
+        ax.plot(n_vals_mean2, run_time_vals_mean2, 'y+', label='run_time_vals_mean 2' , markersize=10)
+
 
     # ax.plot(n_vals_mean, number_of_times_partition_called_vals_mean, 'gx', label='number_of_times_partition_called_vals_mean' , markersize=10)
     plt.title('Runtime Scaling')
@@ -2011,21 +2198,26 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
     # Put a legend below current axis
     lgd = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -.1),
               fancybox=False, shadow=False, ncol=2, numpoints = 1)
-    fig.savefig('permanent_estimation_scaling_plots_diagMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    fig.savefig(plot_filename, bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    # fig.savefig('permanent_estimation_scaling_plots_diagMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent_estimation_scaling_plots_uniformMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent_estimation_scaling_plots_01Matrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     plt.close()
 
     fig = plt.figure()
     ax = plt.subplot(111)
-    ax.plot(log_n_vals_mean, run_time_vals_mean, 'r+', label='runtime' , markersize=10)
+    ax.plot(log_n_vals_mean1, run_time_vals_mean1, 'r+', label='runtime' , markersize=10)
+    if pickle_file_paths2 is not None:
+        ax.plot(log_n_vals_mean2, run_time_vals_mean2, 'y+', label='run_time_vals_mean 2' , markersize=10)
+
     plt.title('Runtime Scaling')
     plt.xlabel('log(N) (log(matrix dimension))')
     plt.ylabel('log(runtime) (log(seconds))')
     # Put a legend below current axis
     lgd = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -.1),
               fancybox=False, shadow=False, ncol=2, numpoints = 1)
-    fig.savefig('permanent_estimation_scaling_plots_logN_diagMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    fig.savefig(plot_filename + 'logN', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    # fig.savefig('permanent_estimation_scaling_plots_logN_diagMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent_estimation_scaling_plots_logN_uniformMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent_estimation_scaling_plots_logN_01Matrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
 
@@ -2269,7 +2461,7 @@ def test_sampling_correctness(N=5, ITERS=10000000, matrix_to_use='rand'):
                         list_of_all_true_probabilities.append(true_probability)
     # print(all_associations)
     # sleep(temp)
-    number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z = \
+    number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, permanent_UBs = \
         test_gumbel_permanent_estimation(N, iters=ITERS, num_samples=1, matrix=matrix)
         # test_gumbel_permanent_estimation(N, iters=1, num_samples=1, matrix=matrix)
     print("wall_time =", wall_time)
@@ -2589,7 +2781,7 @@ def test_logZ_error(N=3, ITERS=10000000, matrix_to_use='rand'):
         assert(False), "wrong parameter for matrix_to_use!!"
     exact_permanent = calc_permanent_rysers(matrix)
 
-    number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z = \
+    number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, permanent_UBs = \
         test_gumbel_permanent_estimation(N, iters=ITERS, num_samples=1, matrix=matrix)
         # test_gumbel_permanent_estimation(N, iters=1, num_samples=1, matrix=matrix)
     print("wall_time =", wall_time)
@@ -2620,58 +2812,74 @@ def test_total_variation_distance(N=3, tv_ITERS=10):
     print "np.mean(gumbel_tv_distance_list) =", np.mean(gumbel_tv_distance_list)
     print "np.mean(standard_tv_distance_list) =", np.mean(standard_tv_distance_list)
 
-def test_permanent_bound_tightness(N):
-    use_diag_matrix = True
-    if use_diag_matrix:
-        matrix, exact_permanent = create_diagonal2(N, k=3, zero_one=False)
+def test_permanent_bound_tightness(N, use_matrix=False, matrix=None):
+    if use_matrix == False:
+        use_diag_matrix = True
+        if use_diag_matrix:
+            matrix, exact_permanent = create_diagonal2(N, k=5, zero_one=False)
 
-    else:
-        matrix = np.random.rand(N,N)
-        for row in range(N):
-            for col in range(N):
-                if matrix[row][col] < .5:
-                    # matrix[row][col] = matrix[row][col] ** 1
-                    matrix[row][col] = 0
-                else:
-                    # matrix[row][col] = 1 - (1 - matrix[row][col])**1
-                    matrix[row][col] = 1
+        else:
+            matrix = np.random.rand(N,N)
+            for row in range(N):
+                for col in range(N):
+                    if matrix[row][col] < .5:
+                        matrix[row][col] = matrix[row][col] ** 1
+                        # matrix[row][col] = 0
+                    else:
+                        matrix[row][col] = 1 - (1 - matrix[row][col])**1
+                        # matrix[row][col] = 1
 
-        exact_permanent = calc_permanent_rysers(matrix)
-        # exact_permanent = 0
 
-    minc2_sub_matrix_min_bound = 0
-    row = 0
-    sub_matrix = np.delete(matrix, row, 0)
-    for col in range(matrix.shape[1]):
-        cur_sub_matrix = np.delete(sub_matrix, col, 1)
-        minc2_sub_matrix_min_bound += matrix[row, col] * minc_extended_UB2(cur_sub_matrix)
+    # matrix = np.array([[0.02119613, 0.63227319, 0.76980874, 0.48558316, 0.09312535, 0.21782214, 0.08640624, 0.45764297, 0.94977823, 0.53365085],
+    #               [0.8760028,  0.71496163, 0.02277475, 0.18681426, 0.30267468, 0.16571689, 0.98345952, 0.85441607, 0.15731342, 0.19554486],
+    #               [0.40401111, 0.88049258, 0.91961023, 0.59388085, 0.08951876, 0.89382644, 0.76628156, 0.43223284, 0.43246381, 0.46189491],
+    #               [0.83991298, 0.20435737, 0.5447851,  0.63195192, 0.24507631, 0.69310934, 0.8518319,  0.39510064, 0.63028636, 0.93082819],
+    #               [0.33150593, 0.58859955, 0.48313886, 0.46273538, 0.76226034, 0.40406069, 0.41718348, 0.26634174, 0.84638477, 0.27546787],
+    #               [0.81861929, 0.32600449, 0.0542015,  0.37139681, 0.17534188, 0.65221004, 0.95801876, 0.47385952, 0.4470294,  0.30665919],
+    #               [0.1329523,  0.55384001, 0.75787698, 0.68159521, 0.45342187, 0.88853756, 0.44781194, 0.6250724,  0.68744354, 0.11769418],
+    #               [0.30805376, 0.1971726,  0.66141022, 0.61088737, 0.72586821, 0.24768436, 0.47490583, 0.35234266, 0.83246263, 0.81291092],
+    #               [0.95881507, 0.88264871, 0.98512152, 0.6529703,  0.52572222, 0.87133197, 0.38387505, 0.2867429,  0.80746319, 0.89256982],
+    #               [0.37829088, 0.57979053, 0.29453573, 0.21166937, 0.48988732, 0.52620089, 0.67418419, 0.30791013, 0.05857503, 0.16759526]])
 
-    minc2_sub_matrix2_min_bound = 0
-    row = 0
-    sub_matrix = np.delete(matrix, row, 0)
-    for col in range(matrix.shape[1]):
-        cur_sub_matrix = np.delete(sub_matrix, col, 1)
-        for col1 in range(cur_sub_matrix.shape[1]):
-            cur_sub_matrix2 = np.delete(cur_sub_matrix, 0, 0)
-            cur_sub_matrix2 = np.delete(cur_sub_matrix2, col1, 1)
-            assert(cur_sub_matrix2.shape[0] == cur_sub_matrix2.shape[1] and cur_sub_matrix2.shape[1] == matrix.shape[1]-2)
-            minc2_sub_matrix2_min_bound += matrix[row, col]* matrix[1, col1] * minc_extended_UB2(cur_sub_matrix2)
+    exact_permanent = calc_permanent_rysers(matrix)
+    # exact_permanent = 0
+
+
+    # minc2_sub_matrix_min_bound = 0
+    # row = 0
+    # sub_matrix = np.delete(matrix, row, 0)
+    # for col in range(matrix.shape[1]):
+    #     cur_sub_matrix = np.delete(sub_matrix, col, 1)
+    #     minc2_sub_matrix_min_bound += matrix[row, col] * minc_extended_UB2(cur_sub_matrix)
+
+    # minc2_sub_matrix2_min_bound = 0
+    # row = 0
+    # sub_matrix = np.delete(matrix, row, 0)
+    # for col in range(matrix.shape[1]):
+    #     cur_sub_matrix = np.delete(sub_matrix, col, 1)
+    #     for col1 in range(cur_sub_matrix.shape[1]):
+    #         cur_sub_matrix2 = np.delete(cur_sub_matrix, 0, 0)
+    #         cur_sub_matrix2 = np.delete(cur_sub_matrix2, col1, 1)
+    #         assert(cur_sub_matrix2.shape[0] == cur_sub_matrix2.shape[1] and cur_sub_matrix2.shape[1] == matrix.shape[1]-2)
+    #         minc2_sub_matrix2_min_bound += matrix[row, col]* matrix[1, col1] * minc_extended_UB2(cur_sub_matrix2)
 
     minc_UB2 = minc_extended_UB2(matrix)
     minc_UB2_of_transpose = minc_extended_UB2(np.transpose(matrix))
     optimized_minc_extended_upper_bound2 = optimized_minc_extened_UB2(matrix)
     # optimized_minc_extended_upper_bound2 = 0
+    bregman_extended_upper_bound = immediate_nesting_extended_bregman(matrix)
 
     print 'log(exact_permanent) =', np.log(exact_permanent)
+    print 'log(bregman_extended_upper_bound) =', np.log(bregman_extended_upper_bound)
     print 'log extended minc2 UB =', np.log(minc_UB2)
     print 'log extended minc2 UB of transpose =', np.log(minc_UB2_of_transpose)
     print 'log optimized extended minc2 UB =', np.log(optimized_minc_extended_upper_bound2)
-    print 'difference =', np.log(minc_UB2) - np.log(exact_permanent)
-    print     
-    print 'log extended minc2 submatrix UB =', np.log(minc2_sub_matrix_min_bound)    
-    print 'log(minc2) - log(submatrix) =', np.log(minc_UB2) - np.log(minc2_sub_matrix_min_bound)
-    print 'log extended minc2 submatrix2 UB =', np.log(minc2_sub_matrix2_min_bound)    
-    print 'log(minc2) - log(submatrix2) =', np.log(minc_UB2) - np.log(minc2_sub_matrix2_min_bound)
+    # print 'difference =', np.log(minc_UB2) - np.log(exact_permanent)
+    # print     
+    # print 'log extended minc2 submatrix UB =', np.log(minc2_sub_matrix_min_bound)    
+    # print 'log(minc2) - log(submatrix) =', np.log(minc_UB2) - np.log(minc2_sub_matrix_min_bound)
+    # print 'log extended minc2 submatrix2 UB =', np.log(minc2_sub_matrix2_min_bound)    
+    # print 'log(minc2) - log(submatrix2) =', np.log(minc_UB2) - np.log(minc2_sub_matrix2_min_bound)
 
 def test_gumbel_mean_concentration(samples):
     mean_off_by_more_than_point1 = []
@@ -2937,8 +3145,146 @@ def test_create_diagonal2():
     assert(permanent == check_permanent), (permanent, check_permanent)    
  
 
+def plot_pruning_effect(pickle_file_paths=['./number_of_times_partition_called_for_each_n.pickle'], pickle_file_paths2=None):
+    n_vals_mean = []
+    log_n_vals_mean = []
+    run_time_vals_mean = []
+    number_of_times_partition_called_vals_mean = []
+    all_n_vals = []
+    all_run_time_vals = []
+    all_number_of_times_partition_called_vals = []
+    fig = plt.figure()
+    ax = plt.subplot(111)
+
+
+    for pickle_file_path in pickle_file_paths:
+        f = open(pickle_file_path, 'rb')
+        number_of_times_partition_called_for_each_n = pickle.load(f)
+        f.close()
+        # for n, (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list) in number_of_times_partition_called_for_each_n.items():
+        for n, (runtimes_list, all_samples_of_log_Z, exact_log_Z, permanent_UBs) in number_of_times_partition_called_for_each_n.items():
+            if n < 5:
+                continue
+            smooth_int = 1
+            sample_number = range(int(np.floor(len(runtimes_list)/smooth_int)))
+            smoothed_runtime_list = [np.mean(runtimes_list[i*smooth_int:(i+1)*smooth_int]) for i in range(int(np.floor(len(runtimes_list)/smooth_int)))]
+            print (sample_number)
+            print (smoothed_runtime_list)
+            # ax.plot(sample_number, smoothed_runtime_list, 'r+', label='matrix size = %d'%n , markersize=10)
+            ax.plot(sample_number, permanent_UBs, 'r+', label='matrix size = %d'%n , markersize=10)
+    # ax.plot(all_n_vals, all_run_time_vals, 'r+', label='run_time_vals_mean' , markersize=10)
+
+    # ax.plot(n_vals_mean, number_of_times_partition_called_vals_mean, 'gx', label='number_of_times_partition_called_vals_mean' , markersize=10)
+    plt.title('Runtime with pruning')
+    plt.xlabel('sample number')
+    plt.ylabel('runtime')
+    # Put a legend below current axis
+    lgd = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -.1),
+              fancybox=False, shadow=False, ncol=2, numpoints = 1)
+    fig.savefig('pruning_effect', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    # fig.savefig('permanent_estimation_scaling_plots_uniformMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    # fig.savefig('permanent_estimation_scaling_plots_01Matrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    plt.close()
+
+ 
+
+
 if __name__ == "__main__":
-    # test_permanent_bound_tightness(N=20)
+    print "COMPARE_WAI:", COMPARE_WAI
+    # matrix_filename = "./networkrepository_data/bipartite/divorce.mtx"
+    # matrix_filename = "./networkrepository_data/directed/GD95_c.mtx"
+    # matrix_filename = "./networkrepository_data/pores_1.mtx"
+    # matrix_filename = "./networkrepository_data/klein-b1.mtx"
+    # matrix_filename = "./networkrepository_data/klein-b2.mtx"
+
+    # matrix_filename = "./networkrepository_data/directed.mtx"
+    # matrix_filename = "./networkrepository_data/football.mtx"
+
+
+    # matrix_filename = "./networkrepository_data/cage5.mtx"
+    # matrix_filename = "./networkrepository_data/chesapeake.mtx"
+    # matrix_filename = "./networkrepository_data/road-chesapeake.mtx"
+    # matrix_filename = "./networkrepository_data/bcspwr01.mtx"
+
+    #these end up trying to sample a gumbel with location log(0), are there permanents 0 or whats happening?
+    #can check with hungarian algorithm
+    # matrix_filename = "./networkrepository_data/soc-karate.mtx"
+    # matrix_filename = "./networkrepository_data/karate.mtx"
+    # matrix_filename = "./networkrepository_data/GD95_a.mtx"
+    # matrix_filename = "./networkrepository_data/GD98_a.mtx"
+
+
+
+    # matrix_filename = "./networkrepository_data/smaller_networks/can_24.mtx"
+
+#not square:
+    # matrix_filename = "./networkrepository_data/smaller_networks/ch3-3-b1.mtx"
+    # matrix_filename = "./networkrepository_data/smaller_networks/ch3-3-b2.mtx"
+    # matrix_filename = "./networkrepository_data/smaller_networks/farm.mtx"
+    # matrix_filename = "./networkrepository_data/smaller_networks/kleemin.mtx"
+    # matrix_filename = "./networkrepository_data/smaller_networks/lpi_itest6.mtx"
+    # matrix_filename = "./networkrepository_data/smaller_networks/n3c4-b3.mtx"
+# 
+#negative entries:
+    # matrix_filename = "./networkrepository_data/smaller_networks/LF10.mtx"
+
+#permanents = 0
+    # matrix_filename = "./networkrepository_data/smaller_networks/Ragusa16.mtx"
+    # matrix_filename = "./networkrepository_data/smaller_networks/Ragusa18.mtx"
+    # matrix_filename = "./networkrepository_data/smaller_networks/Trefethen_20.mtx"
+    # matrix_filename = "./networkrepository_data/smaller_networks/Trefethen_20b.mtx"
+
+    #these end up trying to sample a gumbel with location log(0), are there permanents 0 or whats happening?
+    #can check with hungarian algorithm
+    # matrix_filename = "./networkrepository_data/smaller_networks/GD01_b.mtx"
+    # matrix_filename = "./networkrepository_data/smaller_networks/GD02_a.mtx"
+
+    matrix_filename = "./networkrepository_data/smaller_networks/ENZYMES_g220.edges"
+
+    print "matrix_filename:", matrix_filename
+    f = open(matrix_filename, 'rb')
+    # for .mtx
+    # edge_matrix = scipy.io.mmread(f).toarray()#[0:2, 0:5]
+    #for .edges
+    graph = nx.read_edgelist(f)
+    sparse_matrix = nx.adjacency_matrix(graph)
+    edge_matrix = np.asarray(sparse_matrix.todense())
+    f.close()
+
+    # edge_matrix = np.ones((2, 5))
+    print edge_matrix.shape
+    print type(edge_matrix)
+    print edge_matrix[:5,:5]
+
+    # print edge_matrix
+    # matrix = np.zeros((edge_matrix.shape[0] + edge_matrix.shape[1], edge_matrix.shape[0] + edge_matrix.shape[1]))
+    # for row in range(edge_matrix.shape[0]):
+    #     for col in range(edge_matrix.shape[1]):
+    #         assert(edge_matrix[row][col] == 0 or edge_matrix[row][col] == 1)
+    #         if edge_matrix[row][col] == 1:
+    #             matrix[row][edge_matrix.shape[0] + col] = 1
+    #             matrix[edge_matrix.shape[0] + col][row] = 1
+    #             # matrix[edge_matrix.shape[0] + row][col] = 1
+    matrix = edge_matrix
+    max_element = np.max(matrix)
+    for row in range(matrix.shape[0]):
+        for col in range(matrix.shape[1]):
+            # print "matrix[row][col]:", matrix[row][col]
+            assert(matrix[row][col] >= 0)
+            if max_element > 1:
+                matrix[row][col] /= max_element
+            # if matrix[row][col] == 1:
+
+    # print matrix
+    # print matrix.transpose()
+    # print calc_permanent_rysers(matrix)
+    test_permanent_bound_tightness(N=0, use_matrix=True, matrix=matrix)
+
+    test_gumbel_permanent_estimation(N=0, iters=5, num_samples=1, use_matrix=True, matrix=matrix)    
+    sleep(-99)
+
+
+    # test_permanent_bound_tightness(N=40)
     # test_create_diagonal()
     # test_create_diagonal2()
     # sleep(-4)
@@ -2966,18 +3312,13 @@ if __name__ == "__main__":
     # sleep(-1)
 
 
-    ITERS = 10000
+    ITERS = 5
     NUM_SAMPLES = 1
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_newPermUB2_numSamples=%d_close01matrix.pickle' % (ITERS, NUM_SAMPLES)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_newPermUB2_numSamples=%d.pickle' % (ITERS, NUM_SAMPLES)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_newPermUB2_numSamples=%d_pickPartitionOrder.pickle' % (ITERS, NUM_SAMPLES)
-    
-    #cur paper experiments here
-    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters_diagMatrix.pickle' % (ITERS)
-    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
-    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters_01matrix.pickle' % (ITERS)
-    # pickle_file_path = './nestingUB_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+
 
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_origAStar.pickle' % (ITERS)
     # pickle_file_path = './number_of_times_partition_called_for_each_n_%diters_singleGumbel_n81plus.pickle' % (ITERS)
@@ -3002,26 +3343,77 @@ if __name__ == "__main__":
     #                                        './number_of_times_partition_called_for_each_n_%diters_newPermUB_n71plus.pickle' % ITERS])
  
 
-    pickle_file_path = './test_pruning_improvement_%diters_uniformMatrix.pickle' % (ITERS)
+
+    # cur paper experiments here
+    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters_diagMatrix.pickle' % (ITERS)
+    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+    # pickle_file_path = './nestingUB_savePruningBWsamples_number_of_times_partition_called_for_each_n_%diters_01matrix.pickle' % (ITERS)
+    # pickle_file_path = './nestingUB_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+
+    ########################################################################################################################
+    # comparison of soules upper bound with the bound with immediate nesting proved
+    # this is with the immediate nesting UB and searching for best row to partition
+    # pickle_file_path = './nestingProvedUB_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+    # this is with the immediate nesting UB and always partitioning on the first row
+    # pickle_file_path = './nestingProvedUB_noRowSearch_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+    # pickle_file_path = './nestingProvedUB_noRowSearch_number_of_times_partition_called_for_each_n_%diters01matrix.pickle' % (ITERS)
+    # pickle_file_path = './nestingProvedUB_noRowSearch_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)
+    # this is with soules upper bound which we use
+    # pickle_file_path = './ourUBbound_vs_nestingProvedUB_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+    # this is with soules upper bound which we use, with finding the best row faster
+    #pickle_file_path = './ourUBbound_findBestRowFaster_vs_nestingProvedUB_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+    # this is with soules upper bound which we use, and only searching rows if the first doesn't work
+    # pickle_file_path = './ourUBbound_use0rowWhenPossible_vs_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)
+    pickle_file_path = './ourUBbound_use0rowWhenPossible_vs_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)
 
 
-    plot_runtime_vs_N(pickle_file_paths = [pickle_file_path])
-    plot_estimateAndExactPermanent_vs_N(pickle_file_paths = [pickle_file_path])
+    #compare pruning vs. no pruning accounting for caching of results
+    # pickle_file_path = './10x10_test_pruning_improvement_%diters_uniformMatrix.pickle' % (ITERS)
+    # pickle_file_path = './no_pruning_10x10_test_pruning_improvement_%diters_uniformMatrix.pickle' % (ITERS)
+
+    #test how much we improve the permanent upper bound
+    # pickle_file_path = './10x10_UB_improvement_%diters_uniformMatrix.pickle' % (ITERS)
+    # pickle_file_path = './15x15_UB_improvement_%diters_uniformMatrix.pickle' % (ITERS)
+
+    #test how much we improve the nesting permanent upper bound
+    # pickle_file_path = './10x10_UB_improvement_nestingUB_%diters_uniformMatrix.pickle' % (ITERS)
+
+
+    # plot_pruning_effect(pickle_file_paths = [pickle_file_path])
+
+
+    # plot_runtime_vs_N(pickle_file_paths = ['./ourUBbound_vs_nestingProvedUB_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
+    #                   pickle_file_paths2 =['./nestingProvedUB_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
+    #                   pickle_file_paths2 =['./nestingProvedUB_noRowSearch_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
+    
+
+    # plot_runtime_vs_N(pickle_file_paths = ['./nestingProvedUB_noRowSearch_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
+    #                   pickle_file_paths2 =['./ourUBbound_use0rowWhenPossible_vs_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
+    #                    plot_filename='compareNoSearchNestingUB_soules0rowWhenPossible_uniformMatrix')
+    #                    # plot_filename='compareNoSearchNestingUB_uniformVS01matrix')
+    plot_runtime_vs_N(pickle_file_paths = ['./nestingProvedUB_noRowSearch_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)],
+                      pickle_file_paths2 =['./ourUBbound_use0rowWhenPossible_vs_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)],
+                       plot_filename='compareNoSearchNestingUB_soules0rowWhenPossible_DiagMatrix')
+
+
+    # plot_runtime_vs_N(pickle_file_paths = [pickle_file_path])
+    # plot_estimateAndExactPermanent_vs_N(pickle_file_paths = [pickle_file_path])
     sleep(3)
 
     number_of_times_partition_called_for_each_n = {}
-    for N in [10, 20, 30, 40]:
-    # for N in range(10, 140):
+    # for N in [10]:#, 20, 30, 40]:
+    for N in range(5, 140):
+    # for N in range(5, 15):
     # for N in range(30, 60):
         print( "N =", N)
-        number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, exact_log_Z = test_gumbel_permanent_estimation(N, iters=ITERS, num_samples=NUM_SAMPLES)
-        number_of_times_partition_called_for_each_n[N] = (runtimes_list, all_samples_of_log_Z, exact_log_Z)
+        number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list, all_sampled_associations, wall_time, log_Z_estimate, all_samples_of_log_Z, exact_log_Z, permanent_UBs = test_gumbel_permanent_estimation(N, iters=ITERS, num_samples=NUM_SAMPLES)
+        number_of_times_partition_called_for_each_n[N] = (runtimes_list, all_samples_of_log_Z, exact_log_Z, permanent_UBs)
         # number_of_times_partition_called_for_each_n[N] = (number_of_times_partition_called_list, node_count_plus_heap_sizes_list, runtimes_list)
 
     
-        # f = open(pickle_file_path, 'wb')
-        # pickle.dump(number_of_times_partition_called_for_each_n, f)
-        # f.close() 
+        f = open(pickle_file_path, 'wb')
+        pickle.dump(number_of_times_partition_called_for_each_n, f)
+        f.close() 
 
     sleep(-1)
     N = 40 # cost matrices of size (NxN) 
