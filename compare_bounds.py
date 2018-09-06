@@ -144,7 +144,7 @@ def create_diagonal2(N, k, zero_one=False):
 def test_permanent_bound_tightness(N):
     use_diag_matrix = True
     if use_diag_matrix:
-        matrix, exact_permanent = create_diagonal2(N, k=5, zero_one=False)
+        matrix, exact_permanent = create_diagonal2(N, k=10, zero_one=False)
 
     else:
         matrix = np.random.rand(N,N)
@@ -168,4 +168,4 @@ def test_permanent_bound_tightness(N):
 
 
 if __name__ == "__main__":
-    test_permanent_bound_tightness(N=80)
+    test_permanent_bound_tightness(N=25)

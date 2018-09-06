@@ -46,7 +46,7 @@ DEBUG1 = False
 FIRST_GUMBEL_LARGER = []
 BEST_ROW_CACHE={}
 matrix_permanent_UBs = {}
-COMPARE_WAI = False
+COMPARE_WAI = True
 #
 #
 #References:
@@ -2841,8 +2841,8 @@ def test_permanent_bound_tightness(N, use_matrix=False, matrix=None):
     #               [0.95881507, 0.88264871, 0.98512152, 0.6529703,  0.52572222, 0.87133197, 0.38387505, 0.2867429,  0.80746319, 0.89256982],
     #               [0.37829088, 0.57979053, 0.29453573, 0.21166937, 0.48988732, 0.52620089, 0.67418419, 0.30791013, 0.05857503, 0.16759526]])
 
-    exact_permanent = calc_permanent_rysers(matrix)
-    # exact_permanent = 0
+    # exact_permanent = calc_permanent_rysers(matrix)
+    exact_permanent = 0
 
 
     # minc2_sub_matrix_min_bound = 0
@@ -3191,20 +3191,23 @@ def plot_pruning_effect(pickle_file_paths=['./number_of_times_partition_called_f
 
 if __name__ == "__main__":
     print "COMPARE_WAI:", COMPARE_WAI
-    # matrix_filename = "./networkrepository_data/bipartite/divorce.mtx"
-    # matrix_filename = "./networkrepository_data/directed/GD95_c.mtx"
-    # matrix_filename = "./networkrepository_data/pores_1.mtx"
-    # matrix_filename = "./networkrepository_data/klein-b1.mtx"
-    # matrix_filename = "./networkrepository_data/klein-b2.mtx"
 
-    # matrix_filename = "./networkrepository_data/directed.mtx"
-    # matrix_filename = "./networkrepository_data/football.mtx"
-
-
+#WORKING EXAMPLES
     # matrix_filename = "./networkrepository_data/cage5.mtx"
+    # matrix_filename = "./networkrepository_data/bcspwr01.mtx"
+
+# WAI faster:
+    # matrix_filename = "./networkrepository_data/smaller_networks/can_24.mtx"
+
+#slow:
+    # matrix_filename = "./networkrepository_data/directed/GD95_c.mtx"
     # matrix_filename = "./networkrepository_data/chesapeake.mtx"
     # matrix_filename = "./networkrepository_data/road-chesapeake.mtx"
-    # matrix_filename = "./networkrepository_data/bcspwr01.mtx"
+
+##########################################################################################
+    # matrix_filename = "./networkrepository_data/bipartite/divorce.mtx"
+
+
 
     #these end up trying to sample a gumbel with location log(0), are there permanents 0 or whats happening?
     #can check with hungarian algorithm
@@ -3215,7 +3218,6 @@ if __name__ == "__main__":
 
 
 
-    # matrix_filename = "./networkrepository_data/smaller_networks/can_24.mtx"
 
 #not square:
     # matrix_filename = "./networkrepository_data/smaller_networks/ch3-3-b1.mtx"
@@ -3224,9 +3226,13 @@ if __name__ == "__main__":
     # matrix_filename = "./networkrepository_data/smaller_networks/kleemin.mtx"
     # matrix_filename = "./networkrepository_data/smaller_networks/lpi_itest6.mtx"
     # matrix_filename = "./networkrepository_data/smaller_networks/n3c4-b3.mtx"
+    # matrix_filename = "./networkrepository_data/klein-b1.mtx"
+    # matrix_filename = "./networkrepository_data/klein-b2.mtx"
+
 # 
 #negative entries:
     # matrix_filename = "./networkrepository_data/smaller_networks/LF10.mtx"
+    # matrix_filename = "./networkrepository_data/pores_1.mtx"
 
 #permanents = 0
     # matrix_filename = "./networkrepository_data/smaller_networks/Ragusa16.mtx"
@@ -3239,16 +3245,16 @@ if __name__ == "__main__":
     # matrix_filename = "./networkrepository_data/smaller_networks/GD01_b.mtx"
     # matrix_filename = "./networkrepository_data/smaller_networks/GD02_a.mtx"
 
-    matrix_filename = "./networkrepository_data/smaller_networks/ENZYMES_g220.edges"
+    # matrix_filename = "./networkrepository_data/smaller_networks/ENZYMES_g220.edges"
 
     print "matrix_filename:", matrix_filename
     f = open(matrix_filename, 'rb')
     # for .mtx
-    # edge_matrix = scipy.io.mmread(f).toarray()#[0:2, 0:5]
+    edge_matrix = scipy.io.mmread(f).toarray()#[0:2, 0:5]
     #for .edges
-    graph = nx.read_edgelist(f)
-    sparse_matrix = nx.adjacency_matrix(graph)
-    edge_matrix = np.asarray(sparse_matrix.todense())
+    # graph = nx.read_edgelist(f)
+    # sparse_matrix = nx.adjacency_matrix(graph)
+    # edge_matrix = np.asarray(sparse_matrix.todense())
     f.close()
 
     # edge_matrix = np.ones((2, 5))
