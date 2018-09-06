@@ -338,13 +338,13 @@ def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, 
         print "matrix_UB:", matrix_UB
 
     deltas = np.array([delta(i + 1) for i in range(N - 1)])
-    row_sum = np.empty_like(matrix)
+    row_sum = np.empty_like(matrix, dtype=float)
     for col in range(N):
         matrix_sorted = np.sort(np.delete(matrix, col, 1), axis=1)[:, ::-1]
         row_sum[:, col] = (matrix_sorted * deltas).sum(axis=1)
     # Can't use this trick to multiply all the rows and then divide, as we might get 0 / 0
     # upper_bounds_excluding_row_col = row_sum.prod(axis=0) / row_sum
-    upper_bounds_excluding_row_col = np.empty_like(matrix)
+    upper_bounds_excluding_row_col = np.empty_like(matrix, dtype=float)
     for row in range(N):
         upper_bounds_excluding_row_col[row] = np.delete(row_sum, row, 0).prod(axis=0)
     # The (i, j)-element is the upper bound of the submatrix after deleting the i-th row and j-th column
