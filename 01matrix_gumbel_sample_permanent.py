@@ -682,10 +682,19 @@ def numba_delta(k, numba_delta_cache=NUMBA_DELTA_CACHE):
 
     return numba_delta_cache[k-1]
 
+def minc_extended_UB2(matrix):
+    if COMPARE_WAI:
+        return immediate_nesting_extended_bregman(matrix)
+    assert(matrix.shape[0] == matrix.shape[1])
+    N = matrix.shape[0]
+    deltas = np.array([delta(i + 1) for i in range(N)])
+    matrix_sorted = np.sort(matrix, axis=1)[:, ::-1]
+    return (matrix_sorted * deltas).sum(axis=1).prod()
+
 # @profile
 # @nb.jit
 # @nb.guvectorize(["float64(float64[:,:])"], "(n,n)->()")
-def minc_extended_UB2(matrix):
+def minc_extended_UB2_not_vectorized(matrix):
     #another bound
     #https://ac-els-cdn-com.stanford.idm.oclc.org/S002437950400299X/1-s2.0-S002437950400299X-main.pdf?_tid=fa4d00ee-39a5-4030-b7c1-28bb5fbc76c0&acdnat=1534454814_a7411b3006e0e092622de35cbf015275
     # equation (6), U^M(A)
