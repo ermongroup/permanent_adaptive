@@ -306,9 +306,10 @@ def find_best_row_to_partition_matrix_faster(matrix, prv_required_cells, first_s
 
     return row_with_smallest_partitioned_UB
 
-
+# @profile
 def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, verbose=False):
-    # return 0
+    if COMPARE_WAI:
+        return 0
     global BEST_ROW_CACHE
     # print "BEST_ROW_CACHE:"
     # print BEST_ROW_CACHE
@@ -393,8 +394,8 @@ def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_
     fixed_column_options = list(itertools.permutations(range(N), depth))
     
     prv_required_cells_copy = copy.copy(prv_required_cells)
-    # best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, prv_required_cells_copy, first_sample)
-    best_row_to_partition = find_best_row_to_partition_matrix_faster(local_matrix, prv_required_cells_copy, first_sample, permanentUB)
+    best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, prv_required_cells_copy, first_sample)
+    # best_row_to_partition = find_best_row_to_partition_matrix_faster(local_matrix, prv_required_cells_copy, first_sample, permanentUB)
 
     #swap rows
     # temp_row = np.copy(local_matrix[0])
@@ -785,7 +786,7 @@ def h_func(r):
     else:
         return 1 + (np.e - 1)*r
 
-# @profile
+@profile
 def immediate_nesting_extended_bregman(matrix):
     #https://dukespace.lib.duke.edu/dspace/bitstream/handle/10161/1054/D_Law_Wai_a_200904.pdf?sequence=1&isAllowed=y
 
@@ -3256,14 +3257,21 @@ if __name__ == "__main__":
 
     # matrix_filename = "./networkrepository_data/smaller_networks/ENZYMES_g220.edges"
 
+
+
+    matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g230.edges"
+    # matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g479.edges"
+    # matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g490.edges"
+
+
     print "matrix_filename:", matrix_filename
     f = open(matrix_filename, 'rb')
     # for .mtx
-    edge_matrix = scipy.io.mmread(f).toarray()#[0:2, 0:5]
+    # edge_matrix = scipy.io.mmread(f).toarray()#[0:2, 0:5]
     #for .edges
-    # graph = nx.read_edgelist(f)
-    # sparse_matrix = nx.adjacency_matrix(graph)
-    # edge_matrix = np.asarray(sparse_matrix.todense())
+    graph = nx.read_edgelist(f)
+    sparse_matrix = nx.adjacency_matrix(graph)
+    edge_matrix = np.asarray(sparse_matrix.todense())
     f.close()
 
     # edge_matrix = np.ones((2, 5))
