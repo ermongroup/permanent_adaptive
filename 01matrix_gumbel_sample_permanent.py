@@ -780,14 +780,26 @@ def optimized_minc_extened_UB2(matrix):
     print ("result.x =", result.x, "optimzed_upper_bound =", optimzed_upper_bound)
     return optimzed_upper_bound
 
+# @profile
+def immediate_nesting_extended_bregman(matrix):
+    #https://dukespace.lib.duke.edu/dspace/bitstream/handle/10161/1054/D_Law_Wai_a_200904.pdf?sequence=1&isAllowed=y
+    assert((matrix <= 1).all())
+    assert((matrix >= 0).all())
+    N = matrix.shape[0]
+    assert(N == matrix.shape[1])
+    col_sum = matrix.sum(axis=0)
+    h_func = np.where(col_sum >= 1, col_sum + 0.5 * np.log(col_sum) + np.e - 1, 1 + (np.e - 1) * col_sum) / np.e
+    return h_func.prod()
+
 def h_func(r):
     if r >= 1:
         return r + .5*math.log(r) + np.e - 1
     else:
         return 1 + (np.e - 1)*r
 
-@profile
-def immediate_nesting_extended_bregman(matrix):
+
+# @profile
+def immediate_nesting_extended_bregman_not_vectorized(matrix):
     #https://dukespace.lib.duke.edu/dspace/bitstream/handle/10161/1054/D_Law_Wai_a_200904.pdf?sequence=1&isAllowed=y
 
 
