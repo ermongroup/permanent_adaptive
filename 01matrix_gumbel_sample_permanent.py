@@ -46,7 +46,7 @@ DEBUG1 = False
 FIRST_GUMBEL_LARGER = []
 BEST_ROW_CACHE={}
 matrix_permanent_UBs = {}
-COMPARE_WAI = True
+COMPARE_WAI = False
 #
 #
 #References:
