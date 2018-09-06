@@ -335,6 +335,65 @@ def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, 
     if verbose:
         print "find_best_row_to_partition_matrix", '*'*80        
         print "matrix_UB:", matrix_UB
+
+    deltas = np.array([delta(i + 1) for i in range(N - 1)])
+    row_sum = np.empty_like(matrix)
+    for col in range(N):
+        matrix_sorted = np.sort(np.delete(matrix, col, 1), axis=1)[:, ::-1]
+        row_sum[:, col] = (matrix_sorted * deltas).sum(axis=1)
+    # Can't use this trick to multiply all the rows and then divide, as we might get 0 / 0
+    # upper_bounds_excluding_row_col = row_sum.prod(axis=0) / row_sum
+    upper_bounds_excluding_row_col = np.empty_like(matrix)
+    for row in range(N):
+        upper_bounds_excluding_row_col[row] = np.delete(row_sum, row, 0).prod(axis=0)
+    # The (i, j)-element is the upper bound of the submatrix after deleting the i-th row and j-th column
+    partitioned_UB = (upper_bounds_excluding_row_col * matrix).sum(axis=1)
+    row_with_smallest_partitioned_UB = np.argmin(partitioned_UB)
+    smallest_partitioned_upper_bound = partitioned_UB[row_with_smallest_partitioned_UB]
+
+    if verbose:
+        print "returning new result"
+        print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "matrix_UB =", matrix_UB
+
+    if verbose:
+        print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "matrix_UB =", matrix_UB
+    assert(smallest_partitioned_upper_bound <= matrix_UB + .000001), (smallest_partitioned_upper_bound, matrix_UB)
+
+    BEST_ROW_CACHE[tuple(prv_required_cells)] = row_with_smallest_partitioned_UB
+    # print "BEST_ROW_CACHE:"
+    # print BEST_ROW_CACHE
+
+    return row_with_smallest_partitioned_UB
+
+
+def find_best_row_to_partition_matrix_not_vectorized(matrix, prv_required_cells, first_sample, verbose=False):
+    # return 0
+    global BEST_ROW_CACHE
+    # print "BEST_ROW_CACHE:"
+    # print BEST_ROW_CACHE
+
+    if first_sample and len(prv_required_cells) == 0:
+        pass
+        # BEST_ROW_CACHE = {} #clear the cache, new matrix
+        # print "cache cleared!!"
+    else:
+        assert(len(BEST_ROW_CACHE)>0), (first_sample, len(prv_required_cells), BEST_ROW_CACHE) #the cache should contain something
+
+    if tuple(prv_required_cells) in BEST_ROW_CACHE:
+        if verbose:
+            print "returning cached result"
+        # print "smallest_partitioned_upper_bound =", BEST_ROW_CACHE[tuple(prv_required_cells)]
+
+        return BEST_ROW_CACHE[tuple(prv_required_cells)]
+
+    N = matrix.shape[0]
+    assert(N == matrix.shape[1])
+
+    fixed_column_options = list(itertools.permutations(range(N), 1))
+    matrix_UB = (minc_extended_UB2(matrix))
+    if verbose:
+        print "find_best_row_to_partition_matrix", '*'*80
+        print "matrix_UB:", matrix_UB
     row_with_smallest_partitioned_UB = None
     smallest_partitioned_upper_bound = None
     for row in range(N):
@@ -393,8 +452,8 @@ def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_
     fixed_column_options = list(itertools.permutations(range(N), depth))
     
     prv_required_cells_copy = copy.copy(prv_required_cells)
-    # best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, prv_required_cells_copy, first_sample)
-    best_row_to_partition = find_best_row_to_partition_matrix_faster(local_matrix, prv_required_cells_copy, first_sample, permanentUB)
+    best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, prv_required_cells_copy, first_sample)
+    # best_row_to_partition = find_best_row_to_partition_matrix_faster(local_matrix, prv_required_cells_copy, first_sample, permanentUB)
 
     #swap rows
     # temp_row = np.copy(local_matrix[0])
