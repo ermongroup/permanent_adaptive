@@ -122,7 +122,7 @@ class associationMatrix:
         self.prior_prob = prior_prob
 
 
-def multi_matrix_sample_associations_without_replacement(num_samples, all_association_matrices, verbose=False):
+def multi_matrix_sample_associations_without_replacement(num_samples, all_association_matrices, try_rescaling_all_matrices=True, verbose=False):
     '''
     Inputs:
     - all_association_matrices: list of associationMatrix
@@ -130,6 +130,13 @@ def multi_matrix_sample_associations_without_replacement(num_samples, all_associ
     Outputs
     - samples: (list of associationInfo)
     '''
+    print "multi_matrix_sample_associations_without_replacement called"
+    random_number = np.random.random()
+    matrix_file_name = '/atlas/u/jkuck/rbpf_fireworks/inspect_matrices%f' % random_number
+    print "saving all_association_matrices in %s" % matrix_file_name
+    f = open(matrix_file_name, 'w')
+    pickle.dump(all_association_matrices, f)
+    f.close()
 
     global MATRIX_PERMANENT_UBS
     global BEST_ROW_CACHE
@@ -147,6 +154,33 @@ def multi_matrix_sample_associations_without_replacement(num_samples, all_associ
     # print "BEST_ROW_CACHE:", BEST_ROW_CACHE
     # print "SAMPLED_BIRTHS_DEATHS:", SAMPLED_BIRTHS_DEATHS
 
+    if try_rescaling_all_matrices:
+        for matrix_idx, a_matrix in enumerate(all_association_matrices):
+            N = a_matrix.matrix.shape[0]
+            assert(N == a_matrix.matrix.shape[1])
+            M_remaining = 0
+            while a_matrix.matrix[M_remaining, N-1] != 1:
+                M_remaining += 1
+            T_remaining=0
+            while a_matrix.matrix[M_remaining, T_remaining] != 1:
+                T_remaining += 1
+
+            column_rescalings = a_matrix.matrix[M_remaining, :T_remaining]
+            permanent_rescaling = np.prod(column_rescalings)
+            rescaled_matrix = copy.copy(a_matrix.matrix)
+            rescaled_matrix[:,:T_remaining] /= column_rescalings
+
+            original_permanent_UB = minc_extended_UB2(a_matrix.matrix)
+            rescaled_permanent_UB = minc_extended_UB2(rescaled_matrix)
+            print "original_permanent_UB =", original_permanent_UB, "rescaled_permanent_UB =", rescaled_permanent_UB*permanent_rescaling
+            if rescaled_permanent_UB*permanent_rescaling < original_permanent_UB:
+                a_matrix.matrix = rescaled_matrix
+                a_matrix.prior_prob *= permanent_rescaling
+
+            (association_list, max_assignment) = find_max_assignment(matrix)
+            print "maximum assignment =", max_assignment, "maximum assignment*math.factorial(N) =", max_assignment*math.factorial(N)
+
+    # sleep(323)
     assert(num_samples >= 1)
     samples = []
     while len(samples) < num_samples:
@@ -159,17 +193,22 @@ def multi_matrix_sample_associations_without_replacement(num_samples, all_associ
         for matrix_idx, a_matrix in enumerate(all_association_matrices):
             if (matrix_idx, ()) in MATRIX_PERMANENT_UBS:
                 permanent_UB = MATRIX_PERMANENT_UBS[(matrix_idx, ())]
-                if verbose:
-                    print "matrix_idx, permanent_UB, a_matrix.prior_prob:", matrix_idx, permanent_UB, a_matrix.prior_prob
+                # if verbose:
+                print "matrix_idx, permanent_UB, a_matrix.prior_prob:", matrix_idx, permanent_UB, a_matrix.prior_prob
             else:
-                permanent_UB = minc_extended_UB2(a_matrix.matrix)
+                if a_matrix.matrix.shape[0] > 0:
+                    permanent_UB = minc_extended_UB2(a_matrix.matrix)
+                else: #matrix has shape (0, 0), we have no measurements and no targets.  probability of remaining in this state is 1
+                    permanent_UB = 1.0
+
                 MATRIX_PERMANENT_UBS[(matrix_idx, ())] = permanent_UB
-                if verbose:
-                    print "matrix_idx, permanent_UB, a_matrix.prior_prob:", matrix_idx, permanent_UB, a_matrix.prior_prob
+                # if verbose:
+                print "matrix_idx, permanent_UB, a_matrix.prior_prob:", matrix_idx, permanent_UB, a_matrix.prior_prob
             distribution_over_matrices.append(a_matrix.prior_prob*permanent_UB)
+        # sleep(232)
         if verbose:
             print "distribution_over_matrices before normalization: ", distribution_over_matrices
-        assert(np.sum(distribution_over_matrices) > 0)
+        assert(np.sum(distribution_over_matrices) > 0), (np.sum(distribution_over_matrices), distribution_over_matrices)
         distribution_over_matrices /= np.sum(distribution_over_matrices)
         if verbose:
             print "distribution_over_matrices after normalization: ", distribution_over_matrices
@@ -183,6 +222,7 @@ def multi_matrix_sample_associations_without_replacement(num_samples, all_associ
             continue
         sampled_a_info.matrix_index = sampled_idx
         samples.append(sampled_a_info)
+        print "got a sample! now we have", len(samples), "samples"
     return samples
 
 # @profile
@@ -199,13 +239,16 @@ def sample_association_single_matrix(a_matrix, matrix_idx, verbose=False):
     OR
     -sampled_a_info: (associationInfo)
     '''
+    global MATRIX_PERMANENT_UBS
+    global BEST_ROW_CACHE
+    
     if a_matrix.matrix.shape[0] == 0: #0 measurements and 0 targets
         sampled_a_info = associationInfo(meas_grp_associations=[], dead_target_indices=[], complete_assoc_probability=a_matrix.prior_prob,\
             bottom_prob=1.0, conditional_unassociated_probability=1.0, a_matrix=a_matrix)
+        MATRIX_PERMANENT_UBS[(matrix_idx, ())] -= 1.0
+        assert(MATRIX_PERMANENT_UBS[(matrix_idx, ())] == 0)
         return sampled_a_info
 
-    global MATRIX_PERMANENT_UBS
-    global BEST_ROW_CACHE
     N = a_matrix.matrix.shape[0]
     assert(N == a_matrix.matrix.shape[1])
     #convert 2d array to tuple of tuples
@@ -458,8 +501,8 @@ def sample_unassoc_measurementsAndTargets_helper(unassociated_targets, unassocia
                         pass
 
         birth_prob = birth_prob/(birth_prob + clutter_prob)
-        assert((birth_prob >= 0 or np.allclose(birth_prob, 0)) and (birth_prob <= 1 or np.allclose(birth_prob, 1))), birth_prob
-        assert((clutter_prob >= 0 or np.allclose(clutter_prob, 0)) and (clutter_prob <= 1 or np.allclose(clutter_prob, 1))), clutter_prob
+        assert((birth_prob >= 0 or np.allclose(0, birth_prob, atol=0)) and (birth_prob <= 1 or np.allclose(birth_prob, 1, atol=0))), birth_prob
+        assert((clutter_prob >= 0 or np.allclose(0, clutter_prob, atol=0)) and (clutter_prob <= 1 or np.allclose(clutter_prob, 1, atol=0))), clutter_prob
         if verbose:
             print "birth_prob:", birth_prob
             print "orig_birth_prob:", orig_birth_prob
@@ -514,8 +557,8 @@ def sample_unassoc_measurementsAndTargets_helper(unassociated_targets, unassocia
             print "life_prob:", life_prob
             print "life_prob original:", 1 - orig_death_prob
 
-        assert((death_prob >= 0 or np.allclose(death_prob, 0)) and (death_prob <= 1 or np.allclose(death_prob, 1))), death_prob
-        assert((life_prob >= 0 or np.allclose(life_prob, 0)) and (life_prob <= 1 or np.allclose(life_prob, 1))), life_prob
+        assert((death_prob >= 0 or np.allclose(0, death_prob, atol=0)) and (death_prob <= 1 or np.allclose(death_prob, 1, atol=0))), death_prob
+        assert((life_prob >= 0 or np.allclose(0, life_prob, atol=0)) and (life_prob <= 1 or np.allclose(life_prob, 1, atol=0))), life_prob
 
         if np.random.rand() < death_prob:
             dead_target_indices.append(t_idx) #sampled target death
@@ -648,7 +691,8 @@ def minc_extended_UB2_excludeRowCol(matrix, excluded_row, excluded_col):
 
 
 # @profile
-def find_best_row_to_partition_matrix(matrix, matrix_idx, prv_required_cells, rows_to_select, verbose=False):
+def find_best_row_to_partition_matrix(matrix, matrix_idx, prv_required_cells, rows_to_select, global_row_indices,\
+                                      global_col_indices, verbose=False):
     '''
     Inputs:
     - matrix_idx: (int) the index of the original association matrix, when dealing with multiple states in the
@@ -700,11 +744,199 @@ def find_best_row_to_partition_matrix(matrix, matrix_idx, prv_required_cells, ro
 
     if verbose:
         print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "matrix_UB =", matrix_UB
-    assert(smallest_partitioned_upper_bound < matrix_UB or np.allclose(smallest_partitioned_upper_bound, matrix_UB)), (smallest_partitioned_upper_bound, matrix_UB, matrix.shape, matrix, prv_required_cells)
+
+    if not (smallest_partitioned_upper_bound < matrix_UB or np.allclose(smallest_partitioned_upper_bound, matrix_UB, atol=0)):
+        #FOR DEBUGGING
+        assert(False), "debugging, about to call find_best_row_to_partition_matrix_with_rescaling, remove this assert later if desired"
+        row_with_smallest_partitioned_UB = find_best_row_to_partition_matrix_with_rescaling(matrix, matrix_idx, prv_required_cells, rows_to_select,\
+                                                                                            global_row_indices, global_col_indices)
+    # assert(smallest_partitioned_upper_bound < matrix_UB or np.allclose(smallest_partitioned_upper_bound, matrix_UB)), (smallest_partitioned_upper_bound, matrix_UB, matrix.shape, matrix, prv_required_cells)
 
     BEST_ROW_CACHE[(matrix_idx, tuple(prv_required_cells))] = row_with_smallest_partitioned_UB
 
     return row_with_smallest_partitioned_UB
+
+def find_best_row_to_partition_matrix_with_rescaling(matrix, matrix_idx, prv_required_cells, rows_to_select, \
+                                                     global_row_indices, global_col_indices, verbose=False):
+
+    '''
+    Inputs:
+    - matrix_idx: (int) the index of the original association matrix, when dealing with multiple states in the
+        sequential setting
+    - rows_to_select: (int) select the best row to partition from among the first rows_to_select rows
+    '''
+    global BEST_ROW_CACHE
+    global MATRIX_PERMANENT_UBS
+
+    assert((matrix_idx, tuple(prv_required_cells)) not in BEST_ROW_CACHE)
+
+    N = matrix.shape[0]
+    assert(N == matrix.shape[1])
+
+    #find M_remaining and T_remaining by iterating until we hit the 1's in the bottom right corner
+    M_remaining = 0
+    while matrix[M_remaining, N-1] != 1:
+        M_remaining += 1
+    T_remaining=0
+    while matrix[M_remaining, T_remaining] != 1:
+        T_remaining += 1
+
+    matrix_copy = copy.copy(matrix)
+    column_rescalings = matrix_copy[M_remaining, :T_remaining]
+    matrix_copy[:,:T_remaining] /= column_rescalings
+
+    #!! BE CAREFUL HERE, may need to use this bound, or the rescaled bound !!
+    matrix_UB = min(minc_extended_UB2(matrix_copy), rescaled_tracking_UB(matrix_copy)) 
+
+    deltas = np.array([delta(i + 1) for i in range(N - 1)])
+    row_sum = np.empty_like(matrix_copy, dtype=float)
+    for col in range(N):
+        matrix_sorted = np.sort(np.delete(matrix_copy, col, 1), axis=1)[:, ::-1]
+        row_sum[:, col] = (matrix_sorted * deltas).sum(axis=1)
+    # Can't use this trick to multiply all the rows and then divide, as we might get 0 / 0
+    # upper_bounds_excluding_row_col = row_sum.prod(axis=0) / row_sum
+    upper_bounds_excluding_row_col = np.empty_like(matrix_copy[:rows_to_select,:], dtype=float)
+    # for row in range(N):
+    for row in range(rows_to_select):
+        upper_bounds_excluding_row_col[row] = np.delete(row_sum, row, 0).prod(axis=0)
+    # The (i, j)-element is the upper bound of the submatrix after deleting the i-th row and j-th column
+
+    partitioned_UB = (upper_bounds_excluding_row_col * matrix_copy[:rows_to_select,:]).sum(axis=1)
+    row_with_smallest_partitioned_UB = np.argmin(partitioned_UB)
+    #could use upper_bounds_excluding_row_col to make this faster rather than recomputing
+    smallest_partitioned_upper_bound = 0
+    for col in range(N):
+        cur_submatrix = np.delete(matrix, col, 1) #delete columns
+        cur_submatrix = np.delete(cur_submatrix, row_with_smallest_partitioned_UB, 0) #delete rows
+        curUB = rescaled_tracking_UB(cur_submatrix)
+        cur_required_cells = copy.copy(prv_required_cells)
+        cur_required_cells.append((global_row_indices[row_with_smallest_partitioned_UB], global_col_indices[col]))
+        cur_required_cells = tuple(cur_required_cells)
+        # print "adding to MATRIX_PERMANENT_UBS:", cur_required_cells,
+        MATRIX_PERMANENT_UBS[(matrix_idx, cur_required_cells)] = curUB
+        smallest_partitioned_upper_bound += curUB * matrix[row_with_smallest_partitioned_UB, col]
+
+    # print
+
+    assert(smallest_partitioned_upper_bound < matrix_UB or np.allclose(smallest_partitioned_upper_bound, matrix_UB, atol=0)), (smallest_partitioned_upper_bound, matrix_UB, matrix.shape, matrix, prv_required_cells)
+
+    BEST_ROW_CACHE[(matrix_idx, tuple(prv_required_cells))] = row_with_smallest_partitioned_UB
+
+    return row_with_smallest_partitioned_UB
+
+
+def rescaled_tracking_UB(matrix, M_remaining=None, T_remaining=None):
+    '''
+    divide first T_remaining columns by the constant value matrix in each matrix[i, M_remaining:] entry (i < T_remaining)
+    so that the bottom T_remaining rows are all ones
+
+    note: M_remaining + T_remaining may not be the matrix size because we may have deleted rows/columns
+
+    Inputs:
+    - matrix: (np.array) the matrix whose permanent we are upper bounding
+    - M_remaining: (int) number of measurements
+    - T_remaining: (int) number of targets
+
+    Outputs:
+    - permanent_upper_bound: (float) upper bound on the permanent
+    '''
+    # print '*'*80
+    #find M_remaining and T_remaining by iterating until we hit the 1's in the bottom right corner
+    N = matrix.shape[0]
+    assert(N == matrix.shape[1])
+    
+    M_remaining = 0
+    while matrix[M_remaining, N-1] != 1:
+        M_remaining += 1
+    T_remaining=0
+    while matrix[M_remaining, T_remaining] != 1:
+        T_remaining += 1
+
+    matrix_copy = copy.copy(matrix)
+    column_rescalings = matrix_copy[M_remaining, :T_remaining]
+    # print "column_rescalings:", column_rescalings
+    permanent_rescaling = np.prod(column_rescalings)
+    matrix_copy[:,:T_remaining] /= column_rescalings
+    # print "rescaled matrix_copy:", matrix_copy
+    assert((matrix_copy[M_remaining:, :] == 1).all)
+    permanent_upper_bound = minc_extended_UB2(matrix_copy, try_rescaling=False)
+
+    permanent_upper_bound *= permanent_rescaling
+
+    return permanent_upper_bound
+
+
+class permanent_Upper_Bounds:
+    def __init__(self):
+        upper_bounds_dictionary = {}
+
+
+def correct_errors_during_tightening(N, local_matrix, matrix_idx, prv_required_cells, global_row_indices, global_col_indices, MATRIX_PERMANENT_UBS):
+    '''
+    correct for numerical errors during bound tightening
+    '''
+    assert(N == local_matrix.shape[0] and N == local_matrix.shape[1]) 
+    # assert(len(prv_required_cells) < 8)
+    sum_of_nested_UBs = 0
+    for col in range(N):
+        cur_submatrix = np.delete(local_matrix, col, 1) #delete columnumns
+        cur_submatrix = np.delete(cur_submatrix, 0, 0) #delete rows
+        # print "N:", N, "M:", M, "T:", T, "global_row_indices:", global_row_indices, "global_col_indices:", global_col_indices, "col:", col, "local_matrix:"
+        # print local_matrix
+        cur_required_cells = tuple(prv_required_cells + [(global_row_indices[0], global_col_indices[col])])
+        cur_submatrix_UB = MATRIX_PERMANENT_UBS[(matrix_idx, cur_required_cells)]
+        sum_of_nested_UBs += cur_submatrix_UB * local_matrix[0, col]
+        # print "col:", col, "global_col_indices[col]:", global_col_indices[col], "cur_required_cells:", cur_required_cells, "MATRIX_PERMANENT_UBS[(matrix_idx, required_cells)]:", MATRIX_PERMANENT_UBS[(matrix_idx, required_cells)], "sum_of_nested_UBs:", sum_of_nested_UBs
+
+
+    if sum_of_nested_UBs > MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]: #numerical error
+        slack_correction_term = sum_of_nested_UBs - MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]
+        MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] = sum_of_nested_UBs
+     
+    else:
+        slack_correction_term = 0
+
+    return slack_correction_term
+
+def check_nesting(N, local_matrix, matrix_idx, prv_required_cells, global_row_indices, global_col_indices, MATRIX_PERMANENT_UBS, recurse=True):
+    '''
+    correct for numerical errors during bound tightening
+    '''
+    assert(N == local_matrix.shape[0] and N == local_matrix.shape[1]) 
+    # assert(len(prv_required_cells) < 8)
+    sum_of_nested_UBs = 0
+    for col in range(N):
+        cur_submatrix = np.delete(local_matrix, col, 1) #delete columnumns
+        cur_submatrix = np.delete(cur_submatrix, 0, 0) #delete rows
+        # print "N:", N, "M:", M, "T:", T, "global_row_indices:", global_row_indices, "global_col_indices:", global_col_indices, "col:", col, "local_matrix:"
+        # print local_matrix
+        cur_required_cells = tuple(prv_required_cells + [(global_row_indices[0], global_col_indices[col])])
+
+
+        if (matrix_idx, cur_required_cells) in MATRIX_PERMANENT_UBS:
+            cur_submatrix_UB = MATRIX_PERMANENT_UBS[(matrix_idx, cur_required_cells)]
+            # print "cached UB for", (matrix_idx, cur_required_cells), "=", cur_submatrix_UB
+        else:
+            cur_submatrix_UB = (minc_extended_UB2(cur_submatrix)) 
+            assert(cur_submatrix_UB > -.000000001)
+            if cur_submatrix_UB < 0:
+                cur_submatrix_UB = 0
+            MATRIX_PERMANENT_UBS[(matrix_idx, cur_required_cells)] = cur_submatrix_UB
+
+
+        sum_of_nested_UBs += cur_submatrix_UB * local_matrix[0, col]
+        # print "col:", col, "global_col_indices[col]:", global_col_indices[col], "cur_required_cells:", cur_required_cells, "MATRIX_PERMANENT_UBS[(matrix_idx, required_cells)]:", MATRIX_PERMANENT_UBS[(matrix_idx, required_cells)], "sum_of_nested_UBs:", sum_of_nested_UBs
+
+
+    assert(sum_of_nested_UBs <= MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]), (recurse, len(prv_required_cells), sum_of_nested_UBs, MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))])
+    if recurse:
+        for col in range(N):
+            cur_required_cells = prv_required_cells + [(global_row_indices[0], global_col_indices[col])]            
+            submatrix_global_row_indices = np.delete(global_row_indices, 0)
+            submatrix_global_col_indices = np.delete(global_col_indices, col)
+            cur_submatrix = np.delete(local_matrix, col, 1) #delete columnumns
+            cur_submatrix = np.delete(cur_submatrix, 0, 0) #delete rows
+            check_nesting(N-1, cur_submatrix, matrix_idx, cur_required_cells, submatrix_global_row_indices, submatrix_global_col_indices, MATRIX_PERMANENT_UBS, recurse=False)
 
 def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_required_cells, depth, \
     global_row_indices, global_col_indices, M, T, orig_a_matrix, verbose=False):
@@ -730,6 +962,13 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
     # print orig_a_matrix.matrix
     # print "MATRIX_PERMANENT_UBS:", MATRIX_PERMANENT_UBS
     # print 
+    print "sample_association_01matrix_plusSlack called, len(prv_required_cells):", len(prv_required_cells)
+
+    # print "sample_association_01matrix_plusSlack called, matrix_idx, tuple(prv_required_cells):", matrix_idx, tuple(prv_required_cells)
+
+    # if prv_required_cells == []:
+    #     "matrix_idx:", matrix_idx
+    #     print '#'*80
     if verbose:
         print '-'*80
         print "permanentUB =", permanentUB
@@ -740,6 +979,9 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
 
     assert(permanentUB > 0)
     global MATRIX_PERMANENT_UBS
+    assert(orig_a_matrix.matrix.shape[0] == M + T), (orig_a_matrix.matrix.shape[0], M, T)
+
+
     if DEBUG1:
         print "MATRIX_PERMANENT_UBS:", MATRIX_PERMANENT_UBS
     local_matrix = np.copy(matrix)
@@ -752,7 +994,6 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
         sampled_association_global_indices = [(global_row_indices[0], global_col_indices[0])]
         # assert(MATRIX_PERMANENT_UBS[(matrix_idx, prv_required_cells)] == local_matrix[0,0])
 
-        slack = 0
         required_cells = tuple(prv_required_cells_copy + sampled_association_global_indices)
         if verbose:
             print "N = 1, about to call sample_unassoc_measurementsAndTargets"
@@ -765,12 +1006,16 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
             print "sampled_a_info.conditional_unassociated_probability =", sampled_a_info.conditional_unassociated_probability
             print "MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]:", MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]
             print "matrix[0, 0] * sampled_a_info.conditional_unassociated_probability", matrix[0, 0] * sampled_a_info.conditional_unassociated_probability
-        assert(sampled_a_info.bottom_prob == 1.0)
+        # assert(sampled_a_info.bottom_prob == 1.0), sampled_a_info.bottom_prob 
         if verbose:
             print "1matrix_permanent_UBs[(matrix_idx, tuple(prv_required_cells))] =", MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]
         MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] -= matrix[0, 0] * sampled_a_info.conditional_unassociated_probability
-        print " matrix[0, 0]:",  matrix[0, 0]
-        print "sampled_a_info.conditional_unassociated_probability:", sampled_a_info.conditional_unassociated_probability
+        if MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] < 0:
+            print "< 0"
+            sleep(lessthan0_1)
+            MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] = 0
+
+        slack = matrix[0, 0] * sampled_a_info.conditional_unassociated_probability
 
         if verbose:
             print "2matrix_permanent_UBs[(matrix_idx, tuple(prv_required_cells))] =", MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]
@@ -794,11 +1039,13 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
 
 
     num_possible_rows_to_partition = M-len(prv_required_cells)
+    # print "M:", M
+    # print "len(prv_required_cells):", len(prv_required_cells)
     if num_possible_rows_to_partition == 0: #we've sampled a complete association
         sampled_a_info = sample_unassoc_measurementsAndTargets(tuple(prv_required_cells), orig_a_matrix, matrix_idx)
 
         assert(MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] > math.factorial(T)*sampled_a_info.bottom_prob*sampled_a_info.conditional_unassociated_probability or\
-            np.allclose(MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))], math.factorial(T)*sampled_a_info.bottom_prob*sampled_a_info.conditional_unassociated_probability)), (MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))], math.factorial(T)*sampled_a_info.bottom_prob*sampled_a_info.conditional_unassociated_probability, sampled_a_info.bottom_prob, sampled_a_info.conditional_unassociated_probability, sampled_submatrix, orig_a_matrix.matrix, orig_a_matrix.M, orig_a_matrix.T, orig_a_matrix.conditional_birth_probs, orig_a_matrix.conditional_death_probs)
+            np.allclose(math.factorial(T)*sampled_a_info.bottom_prob*sampled_a_info.conditional_unassociated_probability, MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))], atol=0)), (MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))], math.factorial(T)*sampled_a_info.bottom_prob*sampled_a_info.conditional_unassociated_probability, T, local_matrix)#, sampled_a_info.bottom_prob, sampled_a_info.conditional_unassociated_probability, sampled_submatrix, orig_a_matrix.matrix, orig_a_matrix.M, orig_a_matrix.T, orig_a_matrix.conditional_birth_probs, orig_a_matrix.conditional_death_probs)
         
         #first time this matrix has been sampled, the bound is loose
         if(MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] >= math.factorial(T)*sampled_a_info.bottom_prob):
@@ -809,9 +1056,10 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
         else:
             #the value we sampled
             sampled_slack = math.factorial(T)*sampled_a_info.bottom_prob * sampled_a_info.conditional_unassociated_probability
-            assert((MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] > sampled_slack) or np.allclose(MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))], sampled_slack))
+            assert((MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] > sampled_slack) or np.allclose(sampled_slack, MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))], atol=0))
             if MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] > sampled_slack:
                 MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] -= sampled_slack
+                # correct_errors_during_tightening(N, local_matrix, matrix_idx, prv_required_cells, global_row_indices, global_col_indices, MATRIX_PERMANENT_UBS)
             else:
                 MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] = 0
 
@@ -823,6 +1071,7 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
             MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] = 0
 
         sampled_association_global_indices = []
+
         return sampled_association_global_indices, sampled_slack, prv_required_cells, sampled_a_info
 
 
@@ -842,7 +1091,8 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
     # print "len(prv_required_cells):", len(prv_required_cells)
     # print "local_matrix:"
     # print local_matrix
-    best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, matrix_idx, prv_required_cells_copy, rows_to_select=M-len(prv_required_cells))
+    best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, matrix_idx, prv_required_cells_copy, rows_to_select=M-len(prv_required_cells), global_row_indices=global_row_indices,\
+                                                              global_col_indices=global_col_indices)
 
     #swap rows
     # temp_row = np.copy(local_matrix[0])
@@ -867,15 +1117,19 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
     assert(local_matrix.shape[0] > 1)
     if verbose:
         print "permanentUB:", permanentUB
-        print "proposal distribution submatrix_permanent_UBs:",     
+        print "proposal distribution submatrix_permanent_UBs:",
+
+    # print "proposal distribution for required cells:"     
     for fixed_columns in (fixed_column_options):
         cur_submatrix = np.delete(local_matrix, fixed_columns, 1) #delete columns
         cur_submatrix = np.delete(cur_submatrix, range(depth), 0) #delete rows
 
         hashable_matrix = tuple([tuple(row) for row in cur_submatrix])
         required_cells = tuple(prv_required_cells_copy + [(global_row_indices[row], global_col_indices[fixed_columns[row]]) for row in range(depth)])
+        # print required_cells,
         if (matrix_idx, required_cells) in MATRIX_PERMANENT_UBS:
             submatrix_permanent_UB = MATRIX_PERMANENT_UBS[(matrix_idx, required_cells)]
+            # print "cached UB for", (matrix_idx, required_cells), "=", submatrix_permanent_UB
         else:
             submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
             assert(submatrix_permanent_UB > -.000000001)
@@ -883,7 +1137,8 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
                 submatrix_permanent_UB = 0
            
             MATRIX_PERMANENT_UBS[(matrix_idx, required_cells)] = submatrix_permanent_UB
-        
+            # print "newly computed UB for", (matrix_idx, required_cells), "=", submatrix_permanent_UB
+            
         if verbose:
             print submatrix_permanent_UB,
 
@@ -904,6 +1159,7 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
         if DEBUG1:
             print upper_bound_submatrix_count,
 
+    # print
     if DEBUG1:
         print
 
@@ -911,11 +1167,13 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
     # print "proposal_distribution:", proposal_distribution
     assert(sum_of_submatrix_UBs > 0), (sum_of_submatrix_UBs, proposal_distribution, matrix)
 
-    if sum_of_submatrix_UBs <= permanentUB or np.allclose(sum_of_submatrix_UBs, permanentUB):
+    if sum_of_submatrix_UBs <= permanentUB or np.allclose(sum_of_submatrix_UBs, permanentUB, atol=0):
+        # print "1 prv_required_cells:", prv_required_cells, "sum_of_submatrix_UBs:", sum_of_submatrix_UBs, "permanentUB:", permanentUB
         cur_level_slack = permanentUB - sum_of_submatrix_UBs
         if cur_level_slack < 0.0:
             cur_level_slack = 0.0
         proposal_distribution.append(cur_level_slack)
+        unnormalized_proposal_dist = np.copy(proposal_distribution)
         proposal_distribution /= np.sum(proposal_distribution)
 
         sampled_association_idx = np.random.choice(len(proposal_distribution), p=proposal_distribution)
@@ -924,8 +1182,13 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
             sampled_association = None #we sampled a weight 0 association
 
             MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] -= cur_level_slack #+ sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]#sub_tree_slack            
+            slack_correction_term = correct_errors_during_tightening(N, local_matrix, matrix_idx, prv_required_cells, global_row_indices, global_col_indices, MATRIX_PERMANENT_UBS)
+            check_nesting(N, local_matrix, matrix_idx, prv_required_cells, global_row_indices, global_col_indices, MATRIX_PERMANENT_UBS)
+            cur_level_slack -= slack_correction_term
             assert(MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] > -.000000001)
             if MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] < 0:
+                print "< 0"
+                sleep(lessthan0_2)
                 MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] = 0
             
             
@@ -942,14 +1205,70 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
             sampled_submatrix_permanent_UB = MATRIX_PERMANENT_UBS[(matrix_idx, required_cells)]
 
             prv_required_cells_copy.extend(sampled_association_global_indices)
-            global_row_indices = np.delete(global_row_indices, range(depth))
-            global_col_indices = np.delete(global_col_indices, sampled_fixed_columns)
-            remaining_sampled_associations, sub_tree_slack, prv_required_cells_at_sample, sampled_a_info = sample_association_01matrix_plusSlack(sampled_submatrix, matrix_idx, sampled_submatrix_permanent_UB, prv_required_cells_copy, depth=1, global_row_indices=global_row_indices, global_col_indices=global_col_indices, M=M, T=T, orig_a_matrix=orig_a_matrix)
+            submatrix_global_row_indices = np.delete(global_row_indices, range(depth))
+            submatrix_global_col_indices = np.delete(global_col_indices, sampled_fixed_columns)
+            remaining_sampled_associations, sub_tree_slack, prv_required_cells_at_sample, sampled_a_info = sample_association_01matrix_plusSlack(sampled_submatrix, matrix_idx, sampled_submatrix_permanent_UB, prv_required_cells_copy, depth=1, global_row_indices=submatrix_global_row_indices, global_col_indices=submatrix_global_col_indices, M=M, T=T, orig_a_matrix=orig_a_matrix)
 
+            # print '-'*10
+            # print "2 prv_required_cells:", prv_required_cells
+            # print "pre tightening MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]:", MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]
+            # print "cur_level_slack:", cur_level_slack, "sub_tree_slack:", sub_tree_slack, "sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]:", sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]
+            # print '-'*10
+                
+            #begin DEBUG
+            sum_of_nested_UBs = 0
+            for col in range(N):
+                cur_submatrix = np.delete(local_matrix, col, 1) #delete columnumns
+                cur_submatrix = np.delete(cur_submatrix, 0, 0) #delete rows
+                # print "N:", N, "M:", M, "T:", T, "global_row_indices:", global_row_indices, "global_col_indices:", global_col_indices, "col:", col, "local_matrix:"
+                # print local_matrix
+                cur_required_cells = tuple(prv_required_cells + [(global_row_indices[0], global_col_indices[col])])
+                cur_submatrix_UB = MATRIX_PERMANENT_UBS[(matrix_idx, cur_required_cells)]
+                sum_of_nested_UBs += cur_submatrix_UB * local_matrix[0, col]
+                # print "col:", col, "global_col_indices[col]:", global_col_indices[col], "cur_required_cells:", cur_required_cells, "MATRIX_PERMANENT_UBS[(matrix_idx, required_cells)]:", MATRIX_PERMANENT_UBS[(matrix_idx, required_cells)], "sum_of_nested_UBs:", sum_of_nested_UBs
+
+            assert(sum_of_nested_UBs < MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] or\
+                   # np.abs(sum_of_nested_UBs - MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))])/sum_of_nested_UBs < .01), \
+                   #  (sum_of_nested_UBs, MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))], prv_required_cells)                
+                   np.allclose(sum_of_nested_UBs, MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))], atol=0)), (sum_of_nested_UBs, MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))])
+            #end DEBUG
+
+
+
+            # print "MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]:", MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]
+            # print "cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]:", cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]
+            # print "cur_level_slack :", cur_level_slack 
+            # print "sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]:", sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]
+            # print "unnormalized_proposal_dist:", unnormalized_proposal_dist
             MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] -= cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]#sub_tree_slack
-            assert(MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] > -.000000001)
+            assert(MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] > -.000000001), MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]
             if MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] < 0:
+                print "< 0"
+                sleep(lessthan0_3)
                 MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] = 0
+
+            #debug, check that we didn't mess up nesting during tightening somehow
+            # print "checking nesting:"
+            # print "N:", N
+            # print "local_matrix:", local_matrix
+            # print "global_col_indices:", global_col_indices
+
+            #begin DEBUG
+            slack_correction_term = correct_errors_during_tightening(N, local_matrix, matrix_idx, prv_required_cells, global_row_indices, global_col_indices, MATRIX_PERMANENT_UBS)
+            check_nesting(N, local_matrix, matrix_idx, prv_required_cells, global_row_indices, global_col_indices, MATRIX_PERMANENT_UBS)
+            cur_level_slack -= slack_correction_term
+            
+            assert(sum_of_nested_UBs < MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] or\
+                   # np.abs(sum_of_nested_UBs - MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))])/sum_of_nested_UBs < .01), \
+                   #  (sum_of_nested_UBs, MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))], prv_required_cells)                
+                   np.allclose(sum_of_nested_UBs, MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))], atol=0)), (sum_of_nested_UBs, MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))])
+            #end DEBUG
+
+            # print "finished check for matrix_idx, tuple(prv_required_cells):", matrix_idx, tuple(prv_required_cells)
+            # print "MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))] =", MATRIX_PERMANENT_UBS[(matrix_idx, tuple(prv_required_cells))]
+            # print "sum_of_nested_UBs =", sum_of_nested_UBs
+            # print
+
 
             if remaining_sampled_associations is None: #we sampled some slack
                 sampled_association_global_indices = None
@@ -959,12 +1278,16 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
                 return sampled_association_global_indices, cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]], prv_required_cells_at_sample, sampled_a_info
     else:
         print "sum_of_submatrix_UBs > permanentUB :(:(:("
+        print "matrix_idx, tuple(prv_required_cells):", matrix_idx, tuple(prv_required_cells)
+        print "sum_of_submatrix_UBs: ", sum_of_submatrix_UBs
+        print "permanentUB: ", permanentUB
+
         print "sum_of_submatrix_UBs-permanentUB: ", sum_of_submatrix_UBs-permanentUB
         print "(sum_of_submatrix_UBs-permanentUB)/permanentUB: ", (sum_of_submatrix_UBs-permanentUB)/permanentUB
         print "np.log(sum_of_submatrix_UBs)-np.log(permanentUB): ", np.log(sum_of_submatrix_UBs)-np.log(permanentUB)
-        print "sum_of_submatrix_UBs: ", sum_of_submatrix_UBs
-        print "permanentUB: ", permanentUB
         print "try other partitionings"
+        print "matrix:",
+        print matrix
         assert(False), "not expecting this! also fix find_best_row_to_partition_matrix and caching there, etc."
         find_best_row_to_partition_matrix(local_matrix, matrix_idx, prv_required_cells_copy)
         print
@@ -1056,7 +1379,10 @@ def numba_delta(k, numba_delta_cache=NUMBA_DELTA_CACHE):
 
     return numba_delta_cache[k-1]
 
-def minc_extended_UB2(matrix, verbose=False, check_exact=False):
+def minc_extended_UB2(matrix, verbose=False, check_exact=False, try_rescaling=False):
+    # print "minc_extended_UB2 called on matrix:"
+    # print matrix
+
     if COMPARE_WAI:
         return immediate_nesting_extended_bregman(matrix)
     assert(matrix.shape[0] == matrix.shape[1])
@@ -1075,7 +1401,7 @@ def minc_extended_UB2(matrix, verbose=False, check_exact=False):
         else:
             return math.factorial(N) * np.prod(matrix[0])
 
-    elif(matrix[1:, :] == matrix[1]).all(): #if all columns are constants, calculate exact permanent
+    elif(matrix[1:, :] == matrix[1]).all(): #if all columns are constants, excluding first element, calculate exact permanent
         if verbose:
             print "all columns, excluding first element, are constants:"
             print matrix
@@ -1095,10 +1421,18 @@ def minc_extended_UB2(matrix, verbose=False, check_exact=False):
 
     deltas = np.array([delta(i + 1) for i in range(N)])
     matrix_sorted = np.sort(matrix, axis=1)[:, ::-1]
+    computed_minc_extended_upper_bound = (matrix_sorted * deltas).sum(axis=1).prod()
+    if try_rescaling:
+        computed_minc_extended_upper_bound = min(computed_minc_extended_upper_bound, rescaled_tracking_UB(matrix))
+    # if computed_minc_extended_upper_bound > 0: #just testing potential speed here
+    #     test_conjectured_optimal_bound = conjectured_optimal_bound(matrix)
+    #     upper_bound_return_val = min(test_conjectured_optimal_bound, computed_minc_extended_upper_bound)
+    # else:
+    #     upper_bound_return_val = computed_minc_extended_upper_bound
     if check_exact:
-        return (matrix_sorted * deltas).sum(axis=1).prod(), False
+        return computed_minc_extended_upper_bound, False
     else:
-        return (matrix_sorted * deltas).sum(axis=1).prod()
+        return computed_minc_extended_upper_bound
 
 # @profile
 # @nb.jit
@@ -3577,8 +3911,9 @@ def find_max_assignment(matrix):
     for (row,col) in association_list:
         minimum_cost += np.asscalar(cost_matrix[row][col])
     max_assignment = np.exp(-minimum_cost)
-    print "association_list:", association_list
-    print "max_assignment:", max_assignment
+    # print "association_list:", association_list
+    # print "max_assignment:", max_assignment
+    return (association_list, max_assignment)
 
 def test_nesting(N, verbose=True):
     use_diag_matrix = False
@@ -3627,7 +3962,7 @@ def test_nesting(N, verbose=True):
 
     if verbose:
         print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "matrix_UB =", matrix_UB
-    assert(smallest_partitioned_upper_bound < matrix_UB or np.allclose(smallest_partitioned_upper_bound, matrix_UB)), (smallest_partitioned_upper_bound, matrix_UB)
+    assert(smallest_partitioned_upper_bound < matrix_UB or np.allclose(smallest_partitioned_upper_bound, matrix_UB, atol=0)), (smallest_partitioned_upper_bound, matrix_UB)
 
     return row_with_smallest_partitioned_UB
 
@@ -3774,7 +4109,241 @@ test_array = np.array([[4.34375494e-04,  1.28275053e-03, 3.22266818e-04, 1.46793
  [1.34941249e-01,  1.34941249e-01, 1.34941249e-01, 1.00000000e+00, 1.00000000e+00, 1.00000000e+00, 1.00000000e+00],
  [1.34941249e-01,  1.34941249e-01, 1.34941249e-01, 1.00000000e+00, 1.00000000e+00, 1.00000000e+00, 1.00000000e+00],])
 
+test_array1 = np.array([[7.10141662e-04, 1.46793625e-06, 0.00000000e+00],
+                        [9.15447086e-81, 0.00000000e+00, 1.46793625e-06],
+                        [1.34941249e-01, 1.00000000e+00, 1.00000000e+00]])
+
+
+test_array2 = np.array([[3.10097235e-060, 7.70299370e-044, 1.08677827e-003,
+        3.81715238e-024, 0.00000000e+000, 0.00000000e+000,
+        5.84856525e-004, 0.00000000e+000, 0.00000000e+000,
+        0.00000000e+000, 0.00000000e+000, 0.00000000e+000,
+        0.00000000e+000, 1.46793625e-006, 0.00000000e+000,
+        0.00000000e+000],
+       [0.00000000e+000, 0.00000000e+000, 0.00000000e+000,
+        3.10254263e-311, 1.06873819e-003, 1.21128481e-003,
+        0.00000000e+000, 0.00000000e+000, 0.00000000e+000,
+        0.00000000e+000, 0.00000000e+000, 0.00000000e+000,
+        0.00000000e+000, 0.00000000e+000, 1.46793625e-006,
+        0.00000000e+000],
+       [1.20110187e-022, 3.15350171e-004, 1.09923697e-044,
+        6.87951966e-004, 0.00000000e+000, 0.00000000e+000,
+        6.48534466e-052, 0.00000000e+000, 1.46793625e-006,
+        0.00000000e+000, 0.00000000e+000, 0.00000000e+000,
+        0.00000000e+000, 0.00000000e+000, 0.00000000e+000,
+        0.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000],
+       [1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.34941249e-001, 1.34941249e-001,
+        1.34941249e-001, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000, 1.00000000e+000, 1.00000000e+000,
+        1.00000000e+000]])
+
+error_array = np.array([[7.26840310e-016, 1.19102641e-003, 7.68354243e-103, 4.32954251e-103, 1.38240822e-003, 1.00901386e-019, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.46793625e-006, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000],
+                        [1.12117284e-003, 1.25976951e-015, 1.34030479e-151, 5.18948230e-152, 5.19901707e-014, 2.37626455e-004, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.46793625e-006, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000],
+                        [1.62804365e-301, 2.32410022e-187, 4.08543343e-004, 4.44555427e-004, 5.84875399e-194, 6.07700744e-322, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.46793625e-006, 0.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000],
+                        [1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.34941249e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000]])
+
+error_array1 = np.array([[2.36734057e-089, 3.07686161e-011, 0.00000000e+000, 0.00000000e+000, 7.24334078e-216, 4.94914073e-254, 2.23537993e-028, 2.68138672e-003, 2.26902149e-002, 2.93823303e-012, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                         [6.90278736e-007, 2.67565317e-055, 2.64128155e-155, 9.07741078e-097, 6.67092046e-040, 4.46041929e-073, 8.42267663e-139, 1.01405912e-001, 3.90398386e-001, 0.00000000e+000, 1.95129079e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                         [3.82492022e-151, 0.00000000e+000, 4.87993429e-007, 2.79493335e-027, 2.04027618e-083, 3.40040380e-025, 0.00000000e+000, 8.32895456e-001, 3.98859718e-001, 0.00000000e+000, 0.00000000e+000, 1.54253505e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                         [4.76098959e-090, 1.32911984e-264, 1.00321854e-023, 6.55373085e-007, 9.75199927e-029, 6.77407540e-006, 0.00000000e+000, 7.04584930e-001, 7.88708968e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.62210081e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                         [1.96450603e-035, 4.87568965e-167, 7.59681691e-079, 1.52953128e-028, 6.16679742e-007, 4.22993516e-020, 0.00000000e+000, 3.24464576e-001, 8.33463068e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.62342074e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                         [3.69452493e-082, 4.87573911e-253, 4.10819952e-025, 9.49358177e-005, 8.80606896e-023, 7.39011684e-004, 0.00000000e+000, 6.96335166e-001, 8.51373508e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 2.73478534e-008, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                         [1.47180609e-202, 0.00000000e+000, 1.76617352e-016, 2.08737753e-032, 1.25915364e-100, 1.00211687e-029, 0.00000000e+000, 9.17238139e-001, 3.66431574e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.68311492e-011, 0.00000000e+000, 0.00000000e+000,],
+                         [7.92404422e-224, 3.96227321e-069, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 2.82083383e-006, 2.63886876e-003, 4.81288068e-004, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 2.73478534e-008, 0.00000000e+000,],
+                         [1.92052699e-214, 0.00000000e+000, 4.90938158e-019, 1.26642688e-041, 3.28096399e-115, 1.19744825e-037, 0.00000000e+000, 9.12754448e-001, 2.99790513e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 3.21739452e-009,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 2.31639238e-001, 9.94313750e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 2.31639238e-001, 9.94313750e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 2.31639238e-001, 9.94313750e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 2.31639238e-001, 9.94313750e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 2.31639238e-001, 9.94313750e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 2.31639238e-001, 9.94313750e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 2.31639238e-001, 9.94313750e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 2.31639238e-001, 9.94313750e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 2.31639238e-001, 9.94313750e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],])
+
+error_array2 = np.array([[2.36734057e-089, 3.07686161e-011, 8.30253172e-010, 0.00000000e+000, 7.24334078e-216, 2.23537993e-028, 2.68138672e-003, 2.93823303e-012, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                         [1.96450603e-035, 4.87568965e-167, 6.59843275e-034, 7.59681691e-079, 6.16679742e-007, 0.00000000e+000, 3.24464576e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.62342074e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                         [6.90278736e-007, 2.67565317e-055, 7.75274434e-019, 2.64128155e-155, 6.67092046e-040, 8.42267663e-139, 1.01405912e-001, 0.00000000e+000, 1.95129079e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                         [1.47180609e-202, 0.00000000e+000, 1.43817824e-067, 1.76617352e-016, 1.25915364e-100, 0.00000000e+000, 9.17238139e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.68311492e-011, 0.00000000e+000, 0.00000000e+000,],
+                         [7.92404422e-224, 3.96227321e-069, 1.27380126e-007, 0.00000000e+000, 0.00000000e+000, 2.82083383e-006, 2.63886876e-003, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 2.73478534e-008, 0.00000000e+000,],
+                         [1.92052699e-214, 0.00000000e+000, 3.17942999e-071, 4.90938158e-019, 3.28096399e-115, 0.00000000e+000, 9.12754448e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 3.21739452e-009,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 9.94313750e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 9.94313750e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 9.94313750e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 9.94313750e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 9.94313750e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 9.94313750e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 9.94313750e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 9.94313750e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 9.94313750e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                         [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 9.94313750e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],])
+
+slow_array = np.array([[1.03255159e-056, 1.22128011e-144, 2.71459761e-239, 8.76592419e-115, 4.24704637e-051, 3.98006564e-045, 1.28276307e-008, 1.25542105e-095, 0.00000000e+000, 2.05437656e-088, 1.12293348e-004, 4.90818356e-001, 5.36329732e-001, 2.29802893e-012, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [2.52353869e-043, 1.87140548e-009, 1.36535621e-039, 8.21347291e-007, 1.30430431e-060, 3.11310211e-079, 4.04637753e-101, 1.53864913e-007, 0.00000000e+000, 2.43439506e-011, 1.98672370e-008, 2.35338384e-001, 4.32976560e-001, 0.00000000e+000, 1.90603563e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [0.00000000e+000, 0.00000000e+000, 5.56673335e-283, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.15477409e-011, 4.47901508e-181, 2.84772199e-042, 4.91288066e-004, 4.91288066e-004, 0.00000000e+000, 0.00000000e+000, 6.14426788e-013, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [2.99699972e-145, 1.07073459e-027, 8.00122188e-007, 1.33934670e-030, 7.53951472e-178, 8.35558371e-204, 6.86612175e-229, 8.16053563e-051, 1.00939265e-286, 1.48387389e-004, 6.26340260e-020, 2.79148452e-002, 7.83106498e-002, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.80811013e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [4.64800195e-050, 1.17897872e-007, 6.64223115e-033, 4.23037644e-006, 6.28823194e-069, 1.29840487e-088, 5.21081212e-113, 1.07641330e-008, 0.00000000e+000, 4.07213253e-009, 2.58568924e-009, 1.99498666e-001, 3.81774252e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 2.39486101e-010, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [6.29410896e-010, 1.13058041e-082, 3.69371978e-179, 4.39631798e-066, 4.88592388e-008, 1.31915160e-009, 1.14846867e-045, 1.72195838e-050, 0.00000000e+000, 4.72830155e-060, 9.33679447e-002, 8.21667981e-001, 8.71472001e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 3.26898827e-012, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [1.05730397e-021, 3.87214136e-129, 9.70119615e-247, 6.81419048e-106, 1.42711573e-013, 1.02341576e-007, 4.19374252e-047, 1.32659585e-086, 0.00000000e+000, 2.61046494e-085, 2.04295224e-001, 8.82761862e-001, 7.86163187e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 5.17269005e-012, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [4.71654373e-008, 2.54630446e-059, 2.51573431e-142, 3.70411071e-046, 5.38482807e-010, 1.09391981e-015, 2.63865378e-047, 4.26038908e-033, 0.00000000e+000, 1.14399828e-046, 2.11971362e-002, 7.26359891e-001, 8.61764095e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 4.29071286e-012, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [2.14984806e-010, 1.33793562e-097, 2.18363824e-202, 1.38454715e-078, 8.23139893e-006, 1.60027208e-004, 3.96797463e-041, 4.04680951e-061, 0.00000000e+000, 1.24386517e-068, 3.50883937e-001, 9.16803894e-001, 9.01251316e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 2.73478534e-008, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [9.60025627e-058, 6.42615647e-007, 4.22335881e-028, 8.93765850e-007, 2.93799308e-078, 5.50048303e-099, 1.14611029e-130, 1.30174595e-011, 0.00000000e+000, 2.26512496e-007, 2.55635859e-010, 1.65294072e-001, 3.26884725e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.68008007e-011, 0.00000000e+000, 0.00000000e+000,],
+ [9.00373196e-113, 4.49655282e-017, 3.16267753e-010, 3.90353770e-020, 2.43960563e-141, 9.84501983e-166, 1.30731196e-200, 9.92963076e-036, 0.00000000e+000, 1.13223922e-003, 1.45696876e-016, 5.19464943e-002, 1.27761875e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 4.47531824e-011, 0.00000000e+000,],
+ [3.30751627e-011, 3.67960436e-096, 1.71945945e-197, 6.72432845e-077, 9.99517331e-007, 2.01682864e-005, 1.05958881e-033, 1.83043966e-059, 0.00000000e+000, 2.01921751e-067, 2.77736108e-001, 9.00875149e-001, 8.96055124e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 6.70290525e-009,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 9.08137191e-001, 9.92684090e-001, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],])
+
+slow_array1 = np.array([[2.07586701e-072, 1.40161629e-135, 5.56215914e-281, 6.73882352e-176, 1.43951665e-051, 2.40751623e-009, 2.42654990e-009, 1.26191170e-125, 0.00000000e+000, 5.97195948e-106, 2.50358259e-065, 9.27962780e-010, 1.32997688e-065, 8.94373741e-013, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [1.01179886e-044, 8.34170459e-007, 7.46166670e-042, 7.72511523e-010, 2.87793257e-068, 4.35468786e-015, 4.84906464e-056, 2.19029201e-006, 0.00000000e+000, 2.34178707e-012, 1.87521651e-055, 1.32590443e-115, 6.32138953e-108, 0.00000000e+000, 1.94756833e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [3.60379480e-009, 3.94845470e-063, 3.65629647e-187, 1.64118482e-085, 2.87093654e-007, 3.25640561e-002, 1.11884131e-026, 2.68924609e-057, 0.00000000e+000, 1.12251104e-063, 1.78633706e-007, 1.72947800e-060, 1.18364273e-013, 0.00000000e+000, 0.00000000e+000, 1.05185352e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [5.53390803e-052, 3.30369834e-007, 4.88803522e-035, 4.54017644e-008, 1.08376463e-076, 5.82102907e-017, 3.04838591e-062, 9.91598919e-007, 0.00000000e+000, 5.10936881e-010, 8.34928660e-064, 2.24542309e-129, 8.52096072e-120, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.82064234e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [0.00000000e+000, 0.00000000e+000, 6.29424776e-305, 0.00000000e+000, 0.00000000e+000, 7.99258994e-074, 0.00000000e+000, 0.00000000e+000, 6.20905977e-012, 4.47901508e-181, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 6.97357870e-013, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [4.33891354e-007, 7.16588416e-043, 2.32642124e-149, 1.72927441e-061, 5.61712396e-012, 3.32724538e-003, 2.36266277e-028, 7.30656040e-039, 0.00000000e+000, 9.07860651e-050, 7.21592306e-008, 7.04275257e-062, 3.40082802e-023, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.48249046e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [3.65546861e-152, 1.23062340e-042, 7.27128917e-007, 7.67789217e-029, 1.89273307e-180, 5.95055705e-039, 5.99082330e-118, 1.04585054e-039, 0.00000000e+000, 1.63975525e-004, 9.28885057e-173, 4.22018089e-250, 1.65158400e-261, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.74066316e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [1.18682757e-024, 8.13433095e-109, 1.24921503e-262, 2.87872805e-138, 5.87583219e-009, 1.85980187e-002, 7.92778066e-028, 4.59125840e-099, 0.00000000e+000, 2.84919991e-092, 1.24734574e-018, 1.77588957e-064, 1.50671165e-009, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 5.79260307e-013, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [1.80137192e-060, 4.02415896e-009, 2.24808755e-029, 4.61557160e-007, 3.54921269e-086, 3.61190029e-019, 2.78963743e-071, 2.29700056e-008, 0.00000000e+000, 6.36688413e-008, 1.55665476e-073, 5.86434831e-150, 5.74721477e-133, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.29148701e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+ [8.80020994e-014, 4.63961481e-083, 3.73445907e-222, 4.93000342e-109, 1.68871499e-005, 8.77098029e-002, 7.24049607e-025, 1.66248824e-075, 0.00000000e+000, 8.03303181e-077, 6.86250518e-010, 3.57853075e-059, 2.66437368e-008, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 2.20232440e-010, 0.00000000e+000, 0.00000000e+000,],
+ [2.19114593e-121, 3.16460250e-030, 1.12786515e-009, 1.74601252e-018, 3.49357780e-149, 1.30838283e-032, 2.54493293e-107, 5.70031748e-028, 0.00000000e+000, 1.26853236e-003, 6.67999226e-140, 2.51614883e-225, 7.04052170e-219, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 5.31887239e-011, 0.00000000e+000,],
+ [1.47337410e-011, 4.24749570e-074, 6.11421222e-206, 5.36398187e-100, 3.25636538e-005, 1.55267460e-001, 1.98669541e-019, 1.52605284e-067, 0.00000000e+000, 1.79291081e-071, 4.25387473e-008, 2.41864244e-044, 8.54826221e-009, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 6.70290525e-009,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+ [4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 2.31639238e-001, 8.38371808e-001, 4.51487234e-002, 1.22757249e-001, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],])
+
+problem_array = np.array([[4.30408436e-015, 7.25073878e-048, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 4.47901508e-181, 0.00000000e+000, 0.00000000e+000, 4.47459242e-216, 5.16046422e-012, 0.00000000e+000, 2.28119079e-002, 6.44759685e-013, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                          [1.18249816e-045, 0.00000000e+000, 1.08033774e-009, 3.43604628e-097, 2.54594701e-078, 6.64679151e-048, 4.16802524e-041, 6.22576746e-041, 7.98650708e-200, 0.00000000e+000, 9.83958249e-042, 7.27159690e-002, 0.00000000e+000, 9.64825877e-013, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                          [1.29046143e-023, 0.00000000e+000, 1.00021138e-071, 2.28092844e-007, 2.43500253e-007, 2.94743297e-004, 4.06381611e-058, 1.41233945e-081, 3.16524668e-039, 2.15764198e-300, 3.55291329e-053, 6.92401868e-001, 0.00000000e+000, 0.00000000e+000, 1.64429006e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                          [2.43528606e-014, 0.00000000e+000, 1.09237112e-178, 1.31007246e-031, 4.09072370e-045, 1.43743523e-011, 6.31892425e-168, 3.50912200e-208, 6.06368918e-007, 9.24262353e-182, 1.49961678e-156, 8.49868280e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.57995820e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                          [2.58428515e-022, 0.00000000e+000, 1.67453498e-081, 1.95480851e-006, 9.31276035e-008, 1.94934469e-003, 7.39026889e-065, 5.42072053e-090, 3.75663236e-033, 1.88529223e-292, 2.49101005e-059, 7.48547113e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 2.78520200e-010, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                          [4.79301671e-047, 0.00000000e+000, 8.06636755e-035, 1.43843112e-067, 2.08828352e-050, 1.68021726e-032, 1.47696880e-007, 8.47247259e-010, 2.37894460e-172, 0.00000000e+000, 1.86335622e-007, 1.39491258e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 8.18916640e-012, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                          [1.39235683e-050, 0.00000000e+000, 8.57715656e-036, 3.92714576e-085, 2.89766830e-065, 2.11868502e-040, 5.29524196e-008, 7.22874443e-007, 3.93002911e-201, 0.00000000e+000, 2.01360529e-008, 9.58424372e-002, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.95200205e-010, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                          [2.22540624e-042, 0.00000000e+000, 6.34527594e-034, 8.62810501e-049, 6.86010711e-035, 4.18908604e-024, 4.70045872e-010, 2.48549148e-016, 1.38144530e-139, 0.00000000e+000, 2.63787248e-009, 2.10053893e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 3.68155709e-012, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                          [1.36047796e-055, 0.00000000e+000, 7.99524294e-042, 5.67955490e-107, 2.26165520e-084, 5.11047869e-050, 5.78754479e-012, 2.43091404e-007, 2.09286591e-234, 0.00000000e+000, 9.45811801e-013, 6.18385561e-002, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.14401676e-010, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                          [3.17219297e-022, 0.00000000e+000, 5.15224530e-096, 1.67277382e-007, 2.27817031e-010, 2.54093598e-003, 2.09827335e-074, 1.69032725e-101, 1.25135221e-028, 1.41949691e-289, 4.21386964e-068, 7.92007123e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 1.49576424e-011, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000,],
+                          [5.82525392e-018, 0.00000000e+000, 1.75908165e-152, 2.20358123e-020, 1.92584204e-030, 3.85712570e-007, 1.68388833e-131, 3.90631440e-167, 4.46050157e-011, 3.67994775e-218, 7.75608943e-122, 8.83088870e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 5.22418474e-011, 0.00000000e+000, 0.00000000e+000,],
+                          [1.00704658e-054, 0.00000000e+000, 1.91629213e-038, 2.97124425e-106, 9.14005979e-084, 9.05829851e-050, 3.02574044e-011, 2.92281819e-006, 3.51200869e-232, 0.00000000e+000, 4.01976857e-012, 6.24363169e-002, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 6.70290525e-009, 0.00000000e+000,],
+                          [9.08485762e-044, 0.00000000e+000, 2.45483882e-024, 4.18910612e-063, 2.78034977e-046, 6.58796921e-031, 1.01493836e-005, 9.84753757e-008, 2.47166331e-164, 0.00000000e+000, 6.95822318e-006, 1.48732042e-001, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 0.00000000e+000, 6.70290525e-009,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],
+                          [4.51487234e-002, 2.31639238e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 6.01224008e-001, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 4.51487234e-002, 7.42919967e-002, 9.92684090e-001, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000, 1.00000000e+000,],])
+
 if __name__ == "__main__":
+    # test_permanent_bound_tightness(N=-1, use_matrix=True, matrix=test_array2)
+    # sleep(-1)
 
     # a = np.array([[1.51906459e-51, 1.00016664e-10, 1.19640860e-03, 0.00000000e+00,
     #     0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 0.00000000e+00,
@@ -3809,44 +4378,44 @@ if __name__ == "__main__":
     #    [1.86518244e-01, 1.86518244e-01, 1.86518244e-01, 1.00000000e+00,
     #     1.00000000e+00, 1.00000000e+00, 1.00000000e+00, 1.00000000e+00,
     #     1.00000000e+00, 1.00000000e+00, 1.00000000e+00]])
+    if False:
+        #Test nesting of upper bound when we can only choose between 1 or 2 rows
+        print "complete UB= ", minc_extended_UB2(error_array)
+        nesting_UB_r0 = 0
+        for c in range(error_array.shape[0]):
+            cur_submatrix = np.delete(error_array, c, 1) #delete columns
+            cur_submatrix = np.delete(cur_submatrix, 0, 0) #delete rows
 
-    #Test nesting of upper bound when we can only choose between 1 or 2 rows
-    # print "complete UB= ", minc_extended_UB2(test_array)
-    # nesting_UB_r0 = 0
-    # for c in range(test_array.shape[0]):
-    #     cur_submatrix = np.delete(test_array, c, 1) #delete columns
-    #     cur_submatrix = np.delete(cur_submatrix, 0, 0) #delete rows
+            nesting_UB_r0 += error_array[0, c]*minc_extended_UB2(cur_submatrix)
+            print "intermediate nesting_UB_r0= ", nesting_UB_r0
 
-    #     nesting_UB_r0 += test_array[0, c]*minc_extended_UB2(cur_submatrix)
-    #     print "intermediate nesting_UB_r0= ", nesting_UB_r0
+        print "nesting_UB_r0= ", nesting_UB_r0
 
-    # print "nesting_UB_r0= ", nesting_UB_r0
+        nesting_UB_r1 = 0
+        for c in range(error_array.shape[0]):
+            cur_submatrix = np.delete(error_array, c, 1) #delete columns
+            cur_submatrix = np.delete(cur_submatrix, 1, 0) #delete rows
 
-    # nesting_UB_r1 = 0
-    # for c in range(test_array.shape[0]):
-    #     cur_submatrix = np.delete(test_array, c, 1) #delete columns
-    #     cur_submatrix = np.delete(cur_submatrix, 1, 0) #delete rows
+            nesting_UB_r1 += error_array[1, c]*minc_extended_UB2(cur_submatrix)
+            print "intermediate nesting_UB_r1= ", nesting_UB_r1
 
-    #     nesting_UB_r1 += test_array[1, c]*minc_extended_UB2(cur_submatrix)
-    #     print "intermediate nesting_UB_r1= ", nesting_UB_r1
+        print "nesting_UB_r1= ", nesting_UB_r1    
 
-    # print "nesting_UB_r1= ", nesting_UB_r1    
+        nesting_UB_r2 = 0
+        for c in range(error_array.shape[0]):
+            cur_submatrix = np.delete(error_array, c, 1) #delete columns
+            cur_submatrix = np.delete(cur_submatrix, 2, 0) #delete rows
 
-    # nesting_UB_r2 = 0
-    # for c in range(test_array.shape[0]):
-    #     cur_submatrix = np.delete(test_array, c, 1) #delete columns
-    #     cur_submatrix = np.delete(cur_submatrix, 2, 0) #delete rows
+            nesting_UB_r2 += error_array[2, c]*minc_extended_UB2(cur_submatrix)
+            print "intermediate nesting_UB_r2= ", nesting_UB_r2
 
-    #     nesting_UB_r2 += test_array[2, c]*minc_extended_UB2(cur_submatrix)
-    #     print "intermediate nesting_UB_r2= ", nesting_UB_r2
+        print "nesting_UB_r2= ", nesting_UB_r2      
 
-    # print "nesting_UB_r2= ", nesting_UB_r2      
+        sleep(-10)
 
-    # sleep(-10)
-
-    matrix=np.exp(EXAMPLE_KITTI_LOG_PROBS)
-    M=8
-    T=8
+    # matrix=np.exp(EXAMPLE_KITTI_LOG_PROBS)
+    # M=8
+    # T=8
 
     # matrix=np.exp(EXAMPLE_MOT_LOG_PROBS2)
     # M=27
@@ -3855,11 +4424,45 @@ if __name__ == "__main__":
     # matrix=np.exp(EXAMPLE_MOT_LOG_PROBS3)
     # M=38
     # T=39
-    conditional_birth_probs=np.ones(M)/2
-    conditional_death_probs=np.ones(T)/2
+
+    # print minc_extended_UB2(slow_array1)
+    # print rescaled_tracking_UB(slow_array1)
+    # print conjectured_optimal_bound(slow_array1)
+    # sleep(-2)
+    matrix=problem_array
+
+    # N = matrix.shape[0]
+    # assert(N == matrix.shape[1])
+    # M_remaining = 0
+    # while matrix[M_remaining, N-1] != 1:
+    #     M_remaining += 1
+    # T_remaining=0
+    # while matrix[M_remaining, T_remaining] != 1:
+    #     T_remaining += 1
+
+    # column_rescalings = matrix[M_remaining, :T_remaining]
+    # permanent_rescaling = np.prod(column_rescalings)
+    # matrix[:,:T_remaining] /= column_rescalings    # print matrix
+    M=13
+    T=12
+    matrix[:M,:] = 100000000*matrix[:M,:]
+    # matrix = 1000*matrix
+    # print matrix
+    # sleep(02)
+
+    conditional_birth_probs=np.ones(M)
+    conditional_death_probs=np.ones(T)
     prior_prob=1.0
 
     samples = multi_matrix_sample_associations_without_replacement(10, [associationMatrix(matrix, M, T, conditional_birth_probs, conditional_death_probs, prior_prob)])
+    sleep(324124)
+    matrix_file_name = '/atlas/u/jkuck/rbpf_fireworks/inspect_matrices0.988243'
+    f = open(matrix_file_name, 'r')
+    all_association_matrices = pickle.load(f)
+    f.close()
+    print all_association_matrices[9].matrix
+    sleep(43)
+    samples = multi_matrix_sample_associations_without_replacement(10, [all_association_matrices[9]])
 
 
     for sample in samples:
