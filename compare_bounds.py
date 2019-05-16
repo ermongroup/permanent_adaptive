@@ -25,12 +25,14 @@ from itertools import combinations
 import operator as op
 from functools import reduce
 from gumbel_sample_permanent import optimized_minc_extened_UB2
-sys.path.insert(0, '/Users/jkuck/tracking_research/rbpf_fireworks/mht_helpers')
+# sys.path.insert(0, '/Users/jkuck/tracking_research/rbpf_fireworks/mht_helpers')
+sys.path.insert(0, '../rbpf_fireworks/mht_helpers/')
+
 from constant_num_targets_sample_permenant import conjectured_optimal_bound, sink_horn_scale_then_soules
 
-sys.path.insert(0, '/Users/jkuck/research/bp_permanent')
-import matlab.engine
-eng = matlab.engine.start_matlab()
+# sys.path.insert(0, '/Users/jkuck/research/bp_permanent')
+# import matlab.engine
+# eng = matlab.engine.start_matlab()
 
 def calc_permanent_rysers(matrix):
     '''
@@ -331,8 +333,11 @@ def plot_permanent_bound_tightness_VS_n(max_n):
 
         # plt.show()
 
+        if not os.path.exists('./scaling_plots'):
+            os.makedirs('./scaling_plots')
+
         # fig.savefig('loglog_bound_tightness_comparison_sinkhornSoules_uniformMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
-        fig.savefig('loglog_bound_tightness_comparison_sinkhornSoules_blockDiagk=10', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+        fig.savefig('./scaling_plots/loglog_bound_tightness_comparison_sinkhornSoules_blockDiagk=10', bbox_extra_artists=(lgd,), bbox_inches='tight')    
         plt.close()
 
 
