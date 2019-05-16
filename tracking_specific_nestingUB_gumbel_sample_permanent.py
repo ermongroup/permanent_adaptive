@@ -320,19 +320,20 @@ def multi_matrix_sample_associations_without_replacement(num_samples, all_associ
     Outputs
     - samples: (list of associationInfo)
     '''
-    print "multi_matrix_sample_associations_without_replacement called"
+    # print "multi_matrix_sample_associations_without_replacement called"
     random_number = np.random.random()
-    matrix_file_name = '/atlas/u/jkuck/rbpf_fireworks/matrices_for_debugging/inspect_matrices%f' % random_number
+    matrix_file_name = './%f' % random_number
     if not os.path.exists(os.path.dirname(matrix_file_name)):
         try:
             os.makedirs(os.path.dirname(matrix_file_name))
         except OSError as exc: # Guard against race condition
             if exc.errno != errno.EEXIST:
                 raise
-    print "saving matrices in %s" % matrix_file_name    
-    f = open(matrix_file_name, 'w')
-    pickle.dump(all_association_matrices, f)
-    f.close()
+
+    # print "saving matrices in %s" % matrix_file_name    
+    # f = open(matrix_file_name, 'w')
+    # pickle.dump(all_association_matrices, f)
+    # f.close()
 
 
     global MATRIX_PERMANENT_UBS
@@ -353,7 +354,7 @@ def multi_matrix_sample_associations_without_replacement(num_samples, all_associ
 
     #begin debugging
     (association_list, max_assignment) = find_max_assignment(all_association_matrices[0].matrix)
-    print "maximum assignment =", max_assignment, "maximum assignment*math.factorial(N) =", max_assignment*math.factorial(all_association_matrices[0].matrix.shape[0])
+    # print "maximum assignment =", max_assignment, "maximum assignment*math.factorial(N) =", max_assignment*math.factorial(all_association_matrices[0].matrix.shape[0])
     #end debugging
 
 
@@ -384,20 +385,20 @@ def multi_matrix_sample_associations_without_replacement(num_samples, all_associ
 
             original_permanent_UB = minc_extended_UB2(a_matrix.matrix)
             rescaled_permanent_UB = minc_extended_UB2(rescaled_matrix)
-            print
-            print '-'*80
-            print "a_matrix.matrix:"
-            print a_matrix.matrix
+            # print
+            # print '-'*80
+            # print "a_matrix.matrix:"
+            # print a_matrix.matrix
             (association_list, max_assignment) = find_max_assignment(a_matrix.matrix)
-            print "maximum assignment =", max_assignment, "maximum assignment*math.factorial(N) =", max_assignment*math.factorial(N)
+            # print "maximum assignment =", max_assignment, "maximum assignment*math.factorial(N) =", max_assignment*math.factorial(N)
 
-            print "original_permanent_UB =", original_permanent_UB, "rescaled_permanent_UB =", rescaled_permanent_UB*permanent_rescaling
+            # print "original_permanent_UB =", original_permanent_UB, "rescaled_permanent_UB =", rescaled_permanent_UB*permanent_rescaling
             if rescaled_permanent_UB*permanent_rescaling < original_permanent_UB:
                 a_matrix.matrix = rescaled_matrix
                 a_matrix.prior_prob *= permanent_rescaling
 
-            print '-'*80
-            print
+            # print '-'*80
+            # print
 
     # sleep(323)
     assert(num_samples >= 1)
@@ -435,8 +436,8 @@ def multi_matrix_sample_associations_without_replacement(num_samples, all_associ
             continue
         sampled_a_info.matrix_index = sampled_idx
         samples.append(sampled_a_info)
-        print "got a sample! now we have", len(samples), "samples"
-        sampled_a_info.print_info()
+        # print "got a sample! now we have", len(samples), "samples"
+        # sampled_a_info.print_info()
 
     print "multi_matrix_sample_associations_without_replacement returning", len(samples), "samples"
     assert(len(samples) > 0)
@@ -1018,6 +1019,62 @@ def find_best_row_to_partition_matrix(matrix, matrix_idx, prv_required_cells, ro
 
     return row_with_smallest_partitioned_UB
 
+def find_best_row_to_partition_matrix_constantNumTargets(matrix, matrix_idx, prv_required_cells, verbose=False):
+    '''
+    Inputs:
+    - matrix_idx: (int) the index of the original association matrix, when dealing with multiple states in the
+        sequential setting
+    '''
+
+    global BEST_ROW_CACHE
+    # print "BEST_ROW_CACHE:"
+    # print BEST_ROW_CACHE
+
+    if tuple(prv_required_cells) in BEST_ROW_CACHE:
+        if verbose:
+            print "returning cached result"
+        # print "smallest_partitioned_upper_bound =", BEST_ROW_CACHE[(matrix_idx, tuple(prv_required_cells))]
+
+        return BEST_ROW_CACHE[(matrix_idx, tuple(prv_required_cells))]
+
+    N = matrix.shape[0]
+    assert(N == matrix.shape[1])
+
+    fixed_column_options = list(itertools.permutations(range(N), 1))
+    matrix_UB = (minc_extended_UB2(matrix))
+    if verbose:
+        print "find_best_row_to_partition_matrix", '*'*80        
+        print "matrix_UB:", matrix_UB
+
+    deltas = np.array([delta(i + 1) for i in range(N - 1)])
+    row_sum = np.empty_like(matrix, dtype=float)
+    for col in range(N):
+        matrix_sorted = np.sort(np.delete(matrix, col, 1), axis=1)[:, ::-1]
+        row_sum[:, col] = (matrix_sorted * deltas).sum(axis=1)
+    # Can't use this trick to multiply all the rows and then divide, as we might get 0 / 0
+    # upper_bounds_excluding_row_col = row_sum.prod(axis=0) / row_sum
+    upper_bounds_excluding_row_col = np.empty_like(matrix, dtype=float)
+    for row in range(N):
+        upper_bounds_excluding_row_col[row] = np.delete(row_sum, row, 0).prod(axis=0)
+    # The (i, j)-element is the upper bound of the submatrix after deleting the i-th row and j-th column
+    partitioned_UB = (upper_bounds_excluding_row_col * matrix).sum(axis=1)
+    row_with_smallest_partitioned_UB = np.argmin(partitioned_UB)
+    smallest_partitioned_upper_bound = partitioned_UB[row_with_smallest_partitioned_UB]
+
+    if verbose:
+        print "returning new result"
+        print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "matrix_UB =", matrix_UB
+
+    if verbose:
+        print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "matrix_UB =", matrix_UB
+    assert(smallest_partitioned_upper_bound < matrix_UB or np.allclose(smallest_partitioned_upper_bound, matrix_UB)), (smallest_partitioned_upper_bound, matrix_UB, matrix.shape, matrix)
+
+    BEST_ROW_CACHE[(matrix_idx, tuple(prv_required_cells))] = row_with_smallest_partitioned_UB
+    # print "BEST_ROW_CACHE:"
+    # print BEST_ROW_CACHE
+
+    return row_with_smallest_partitioned_UB
+
 def find_best_row_to_partition_matrix_with_rescaling(matrix, matrix_idx, prv_required_cells, rows_to_select, \
                                                      global_row_indices, global_col_indices, verbose=False):
 
@@ -1129,7 +1186,7 @@ def rescaled_tracking_UB(matrix, M_remaining=None, T_remaining=None):
 
 
 def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_required_cells, depth, \
-    global_row_indices, global_col_indices, M, T, orig_a_matrix, verbose=False):
+    global_row_indices, global_col_indices, M, T, orig_a_matrix, verbose=False, tracking_constant_num_targets=False):
     '''
     Inputs: 
         - matrix: (np.array of shape NxN)
@@ -1169,7 +1226,10 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
 
     assert(permanentUB > 0)
     global MATRIX_PERMANENT_UBS
-    assert(orig_a_matrix.matrix.shape[0] == M + T), (orig_a_matrix.matrix.shape[0], M, T)
+    if not tracking_constant_num_targets:
+        assert(orig_a_matrix.matrix.shape[0] == M + T), (orig_a_matrix.matrix.shape[0], M, T)
+    else:
+        assert(orig_a_matrix.matrix.shape[0] == M), (orig_a_matrix.matrix.shape[0], M, T)
 
 
     if DEBUG1:
@@ -1276,8 +1336,11 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
     # print "len(prv_required_cells):", len(prv_required_cells)
     # print "local_matrix:"
     # print local_matrix
-    best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, matrix_idx, prv_required_cells_copy, rows_to_select=M-len(prv_required_cells), global_row_indices=global_row_indices,\
-                                                              global_col_indices=global_col_indices)
+    if tracking_constant_num_targets:
+        best_row_to_partition = find_best_row_to_partition_matrix_constantNumTargets(local_matrix, matrix_idx, prv_required_cells_copy)
+    else:
+        best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, matrix_idx, prv_required_cells_copy, rows_to_select=M-len(prv_required_cells), global_row_indices=global_row_indices,\
+                                                                  global_col_indices=global_col_indices)
 
     #swap rows
     # temp_row = np.copy(local_matrix[0])
@@ -4030,7 +4093,7 @@ def plot_pruning_effect(pickle_file_paths=['./number_of_times_partition_called_f
 
  
 def find_max_assignment(matrix):
-    assert((matrix >= 0).all())
+    assert((matrix >= 0).all()), matrix
     cost_matrix = -np.log(matrix)
 
     lin_assign = linear_assignment.LinearAssignment(cost_matrix)

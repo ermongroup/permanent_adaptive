@@ -2340,19 +2340,52 @@ def test_total_variation_distance(N=3, tv_ITERS=10):
     print "np.mean(gumbel_tv_distance_list) =", np.mean(gumbel_tv_distance_list)
     print "np.mean(standard_tv_distance_list) =", np.mean(standard_tv_distance_list)
 
-def test_permanent_bound_tightness(N):
-    matrix = np.random.rand(N,N)
-    for row in range(N):
-        for col in range(N):
-            if matrix[row][col] < .5:
-                matrix[row][col] = matrix[row][col] ** 1
-                # matrix[row][col] = 0
-            else:
-                matrix[row][col] = 1 - (1 - matrix[row][col])**1
-                # matrix[row][col] = 1
+def permanent_UB_scaled_jurkat_ryser(matrix):
+    '''
+    https://ac.els-cdn.com/S0016003204000638/1-s2.0-S0016003204000638-main.pdf?_tid=7a613f9d-2a05-49e5-8788-aeaa06b29405&acdnat=1547323382_c147a4192f2e34cd8dc0c66a972bedb4
+    p. 583
+    '''    
+    assert(matrix.shape[0] == matrix.shape[1]) 
+    column_sums = np.sum(matrix, axis=0)
+    column_normalized_matrix = matrix/column_sums
+    assert(np.allclose(np.sum(column_normalized_matrix, axis=0), 1.0)), (np.sum(column_normalized_matrix, axis=0))
+    column_normalized_row_sums = np.sum(column_normalized_matrix, axis=1)
+    min_row_vals = np.minimum(column_normalized_row_sums, np.ones(matrix.shape[0]))
+    permanent_UB = np.prod(min_row_vals)*np.prod(column_sums)
+    return permanent_UB
 
-    exact_permanent = calc_permanent_rysers(matrix)
-    # exact_permanent = 0
+def permanent_UB_jurkat_ryser(matrix):
+    '''
+    https://ac.els-cdn.com/S0016003204000638/1-s2.0-S0016003204000638-main.pdf?_tid=7a613f9d-2a05-49e5-8788-aeaa06b29405&acdnat=1547323382_c147a4192f2e34cd8dc0c66a972bedb4
+    p. 583
+    '''    
+    assert(matrix.shape[0] == matrix.shape[1]) 
+    column_sums = np.sum(matrix, axis=0)
+    row_sums = np.sum(matrix, axis=1)
+    min_sums = np.minimum(column_sums, row_sums)
+    permanent_UB = np.prod(min_sums)
+    return permanent_UB
+
+
+def test_permanent_bound_tightness(N):
+    USE_DIAGONAL = True
+    if USE_DIAGONAL:
+        matrix, exact_permanent = create_diagonal2(N, k=3, zero_one=False) 
+    else:       
+        matrix = np.random.rand(N,N)
+        for row in range(N):
+            for col in range(N):
+                if matrix[row][col] < .5:
+                    matrix[row][col] = matrix[row][col] ** 1
+                    # matrix[row][col] = 0
+                else:
+                    matrix[row][col] = 1 - (1 - matrix[row][col])**1
+                    # matrix[row][col] = 1
+
+    # matrix = np.array([[1,2],[2,3]])
+
+        exact_permanent = calc_permanent_rysers(matrix)
+        # exact_permanent = 0
 
     minc2_sub_matrix_min_bound = 0
     row = 0
@@ -2374,10 +2407,15 @@ def test_permanent_bound_tightness(N):
 
     minc_UB2 = minc_extended_UB2(matrix)
     minc_UB2_of_transpose = minc_extended_UB2(np.transpose(matrix))
-    # optimized_minc_extended_upper_bound2 = optimized_minc_extened_UB2(matrix)
-    optimized_minc_extended_upper_bound2 = 0
+    optimized_minc_extended_upper_bound2 = optimized_minc_extened_UB2(matrix)
+    # optimized_minc_extended_upper_bound2 = 0
+
+    scaled_jurkat_ryser_UB = permanent_UB_scaled_jurkat_ryser(matrix)
+    jurkat_ryser_UB = permanent_UB_jurkat_ryser(matrix)
 
     print 'log(exact_permanent) =', np.log(exact_permanent)
+    print 'log(scaled_jurkat_ryser_UB) =', np.log(scaled_jurkat_ryser_UB)
+    print 'log(jurkat_ryser_UB) =', np.log(jurkat_ryser_UB)
     print 'log extended minc2 UB =', np.log(minc_UB2)
     print 'log extended minc2 UB of transpose =', np.log(minc_UB2_of_transpose)
     print 'log optimized extended minc2 UB =', np.log(optimized_minc_extended_upper_bound2)
@@ -2509,8 +2547,8 @@ if __name__ == "__main__":
 
     # test_gumbel_mean_concentration(samples=1000)
     # sleep(-4)
-    # test_permanent_bound_tightness(N=20)   
-    # exit(0)
+    test_permanent_bound_tightness(N=20)   
+    exit(0)
     # test_total_variation_distance()
     # test_sampling_correctness(ITERS=100000, matrix_to_use='rand')
     # test_sampling_correctness(ITERS=100000, matrix_to_use='rand')
