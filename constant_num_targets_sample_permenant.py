@@ -32,6 +32,7 @@ from operator import mul
 # from permanent_model import compute_gumbel_upper_bound, approx_permanent3
 # from boundZ import calculate_gumbel_slack
 
+#download rbpf_fireworks from here: https://github.com/ermongroup/rbpf_fireworks
 sys.path.insert(0, '/Users/jkuck/tracking_research/rbpf_fireworks/mht_helpers')
 from k_best_assignment import k_best_assignments
 
