@@ -61,5 +61,10 @@ def test_binomial_concentration(samples, p=.5):
 
 if __name__ == "__main__":
     # test_gumbel_mean_concentration(100000)
-    test_gumbel_MLE_concentration(400)
-    test_binomial_concentration(400, p=.1)
+    samples = 400
+    p = .0001
+    test_gumbel_MLE_concentration(samples)
+    test_binomial_concentration(samples/p, p=p)
+
+
+

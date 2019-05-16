@@ -141,8 +141,18 @@ def create_diagonal2(N, k, zero_one=False):
             return diag_matrix, diag_matrix_permanent
 
 
+def singular_value_bound(matrix):
+    #https://arxiv.org/abs/1212.0025
+    u, s, vh = np.linalg.svd(matrix, full_matrices=True)
+    assert(max(s) == s[0])
+    largest_singular_value = s[0]
+    n = matrix.shape[0]
+    assert(n == matrix.shape[1])
+    permanent_upper_bound = largest_singular_value ** n
+    return permanent_upper_bound
+
 def test_permanent_bound_tightness(N):
-    use_diag_matrix = True
+    use_diag_matrix = False
     if use_diag_matrix:
         matrix, exact_permanent = create_diagonal2(N, k=10, zero_one=False)
 
@@ -162,10 +172,14 @@ def test_permanent_bound_tightness(N):
     minc_UB2 = minc_extended_UB2(matrix)
     bregman_extended_upper_bound = immediate_nesting_extended_bregman(matrix)
 
+
+
+    singular_value_upper_bound = singular_value_bound(matrix)
+
     print 'log(exact_permanent) =', np.log(exact_permanent)
     print 'log(bregman_extended_upper_bound) =', np.log(bregman_extended_upper_bound)
     print 'log extended minc2 UB =', np.log(minc_UB2)
-
+    print 'log(singular_value_upper_bound)', np.log(singular_value_upper_bound)
 
 if __name__ == "__main__":
-    test_permanent_bound_tightness(N=25)
+    test_permanent_bound_tightness(N=50)
