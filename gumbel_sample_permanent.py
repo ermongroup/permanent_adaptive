@@ -2368,20 +2368,24 @@ def permanent_UB_jurkat_ryser(matrix):
 
 
 def test_permanent_bound_tightness(N):
-    matrix = np.random.rand(N,N)
-    for row in range(N):
-        for col in range(N):
-            if matrix[row][col] < .5:
-                matrix[row][col] = matrix[row][col] ** 1
-                # matrix[row][col] = 0
-            else:
-                matrix[row][col] = 1 - (1 - matrix[row][col])**1
-                # matrix[row][col] = 1
+    USE_DIAGONAL = True
+    if USE_DIAGONAL:
+        matrix, exact_permanent = create_diagonal2(N, k=3, zero_one=False) 
+    else:       
+        matrix = np.random.rand(N,N)
+        for row in range(N):
+            for col in range(N):
+                if matrix[row][col] < .5:
+                    matrix[row][col] = matrix[row][col] ** 1
+                    # matrix[row][col] = 0
+                else:
+                    matrix[row][col] = 1 - (1 - matrix[row][col])**1
+                    # matrix[row][col] = 1
 
-    matrix = np.array([[1,2],[2,3]])
+    # matrix = np.array([[1,2],[2,3]])
 
-    exact_permanent = calc_permanent_rysers(matrix)
-    # exact_permanent = 0
+        exact_permanent = calc_permanent_rysers(matrix)
+        # exact_permanent = 0
 
     minc2_sub_matrix_min_bound = 0
     row = 0
@@ -2403,8 +2407,8 @@ def test_permanent_bound_tightness(N):
 
     minc_UB2 = minc_extended_UB2(matrix)
     minc_UB2_of_transpose = minc_extended_UB2(np.transpose(matrix))
-    # optimized_minc_extended_upper_bound2 = optimized_minc_extened_UB2(matrix)
-    optimized_minc_extended_upper_bound2 = 0
+    optimized_minc_extended_upper_bound2 = optimized_minc_extened_UB2(matrix)
+    # optimized_minc_extended_upper_bound2 = 0
 
     scaled_jurkat_ryser_UB = permanent_UB_scaled_jurkat_ryser(matrix)
     jurkat_ryser_UB = permanent_UB_jurkat_ryser(matrix)
