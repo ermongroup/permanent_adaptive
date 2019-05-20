@@ -885,27 +885,32 @@ def sinkhorn_scale(matrix, debug=False, max_iters=np.inf, do_cols = True, do_row
     return double_stochastic_matrix, cols_scaling, rows_scaling
 
 def conjectured_optimal_bound(matrix, return_lower_bound=False):
+    #https://arxiv.org/pdf/1408.0976.pdf
     assert(matrix.shape[0] == matrix.shape[1])
     N = matrix.shape[0]
     # print '-'*80
     # print "matrix:", matrix
+    time0 = time.time()
     double_stochastic_matrix, cols_scaling, rows_scaling = sinkhorn_scale(matrix)
     # print "double_stochastic_matrix:", double_stochastic_matrix
     one_minus_matrix = 1 - double_stochastic_matrix
     # print "one_minus_matrix:", one_minus_matrix
     permanent_LB = np.prod(np.power(one_minus_matrix, one_minus_matrix)) / (np.prod(cols_scaling)*np.prod(rows_scaling))
     # print "permanent_LB:", permanent_LB
-    permanent_UB = 2**(N/2) * permanent_LB
-    # permanent_UB = 2**(N) * np.prod(np.power(one_minus_matrix, one_minus_matrix)) / (np.prod(cols_scaling)*np.prod(rows_scaling))
-    # print "permanent_UB:", permanent_UB
+    valid_sinkhorn_UB = 2**(N) * permanent_LB
+    time1 = time.time()
+    runtime = time1 - time0
+    conjectured_permanent_UB = 2**(N/2) * permanent_LB
+    # conjectured_permanent_UB = 2**(N) * np.prod(np.power(one_minus_matrix, one_minus_matrix)) / (np.prod(cols_scaling)*np.prod(rows_scaling))
+    # print "conjectured_permanent_UB:", conjectured_permanent_UB
     if return_lower_bound:
         if N == 1:
             return matrix[0,0], matrix[0,0]
-        return permanent_LB, permanent_UB
+        return permanent_LB, conjectured_permanent_UB, valid_sinkhorn_UB, runtime
     else:
         if N == 1:
             return matrix[0,0]
-        return permanent_UB
+        return conjectured_permanent_UB
 
 # @profile
 def minc_extended_UB2_excludeRowCol(matrix, excluded_row, excluded_col):
@@ -4481,10 +4486,10 @@ if __name__ == "__main__":
     # matrix_filename = "./networkrepository_data/cage5.mtx"
     # matrix_filename = "./networkrepository_data/bcspwr01.mtx"
 
-    # matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g192.edges" #change file eading for .edges!!
+    matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g192.edges" #change file eading for .edges!!
     # matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g230.edges" #change file eading for .edges!!
     # matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g479.edges" #change file eading for .edges!!
-    matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g490.edges" #change file eading for .edges!!
+    # matrix_filename = "./networkrepository_data/edge_defined/ENZYMES_g490.edges" #change file eading for .edges!!
 
 
 # WAI faster:
@@ -4554,11 +4559,21 @@ if __name__ == "__main__":
 
     # edge_matrix = np.random.rand(N,N)
 
-    t0 = time.time()
-    print "bp lower bound:", get_bp_lower_bound(edge_matrix)
-    t1 = time.time()
-    print "time:", t1-t0
-    sleep(0134)
+    permanent_LB, conjectured_permanent_UB, valid_sinkhorn_UB, runtime = conjectured_optimal_bound(edge_matrix, return_lower_bound=True)
+
+    print("sinkhorn approximation from gurvits:")
+    print("ln(permanent_LB)", np.log(permanent_LB))
+    print("ln(conjectured_permanent_UB)", np.log(conjectured_permanent_UB))
+    print("ln(valid_sinkhorn_UB)", np.log(valid_sinkhorn_UB))
+    print("runtime", runtime)
+
+
+    # t0 = time.time()
+    # print "bp lower bound:", get_bp_lower_bound(edge_matrix)
+    # t1 = time.time()
+    # print "time:", t1-t0
+    # sleep(0134)
+
     # edge_matrix = np.ones((2, 5))
     # print edge_matrix.shape
     # print type(edge_matrix)
@@ -4569,7 +4584,9 @@ if __name__ == "__main__":
         for col in range(edge_matrix.shape[1]):
             print edge_matrix[row][col],
         print
-    find_max_assignment(edge_matrix)
+
+    # find_max_assignment(edge_matrix)
+    
     # print edge_matrix
     # matrix = np.zeros((edge_matrix.shape[0] + edge_matrix.shape[1], edge_matrix.shape[0] + edge_matrix.shape[1]))
     # for row in range(edge_matrix.shape[0]):
@@ -4579,15 +4596,18 @@ if __name__ == "__main__":
     #             matrix[row][edge_matrix.shape[0] + col] = 1
     #             matrix[edge_matrix.shape[0] + col][row] = 1
     #             # matrix[edge_matrix.shape[0] + row][col] = 1
-    matrix = edge_matrix
-    max_element = np.max(matrix)
-    for row in range(matrix.shape[0]):
-        for col in range(matrix.shape[1]):
-            # print "matrix[row][col]:", matrix[row][col]
-            assert(matrix[row][col] >= 0)
-            if max_element > 1:
-                matrix[row][col] /= max_element
-            # if matrix[row][col] == 1:
+
+    divide_by_max_element = False
+    if divide_by_max_element:
+        matrix = edge_matrix
+        max_element = np.max(matrix)
+        for row in range(matrix.shape[0]):
+            for col in range(matrix.shape[1]):
+                # print "matrix[row][col]:", matrix[row][col]
+                assert(matrix[row][col] >= 0)
+                if max_element > 1:
+                    matrix[row][col] /= max_element
+                # if matrix[row][col] == 1:
 
     # print matrix
     # print matrix.transpose()
@@ -4595,25 +4615,25 @@ if __name__ == "__main__":
 
     RUN_REAL_DATA_TEST = True
     if RUN_REAL_DATA_TEST:
-        print EXAMPLE_MOT_LOG_PROBS2        
-        matrix = np.exp(EXAMPLE_MOT_LOG_PROBS2)
-        print matrix
-        test_permanent_bound_tightness(N=0, use_matrix=True, matrix=matrix)
-        print np.sum(matrix, axis=0)
-        print "np.sum(matrix, axis=0)"
+        # print EXAMPLE_MOT_LOG_PROBS2        
+        # matrix = np.exp(EXAMPLE_MOT_LOG_PROBS2)
+        # print matrix
+        # test_permanent_bound_tightness(N=0, use_matrix=True, matrix=matrix)
+        # print np.sum(matrix, axis=0)
+        # print "np.sum(matrix, axis=0)"
         # test_permanent_bound_tightness(N=0, use_matrix=True, matrix=matrix/np.sum(matrix, axis=0))
         # print "np.prod(np.sum(matrix, axis=0)):"
         # print np.prod(np.sum(matrix, axis=0))
         # matrix=matrix/np.sum(matrix, axis=0)
 
 
-        top_k_assignments = k_best_assignments(100, -EXAMPLE_MOT_LOG_PROBS2)
-        print top_k_assignments[0]
-        print "top assignment vals:"
-        for (cost, assignment) in top_k_assignments:
-            print np.exp(-cost)
+        # top_k_assignments = k_best_assignments(100, -EXAMPLE_MOT_LOG_PROBS2)
+        # print top_k_assignments[0]
+        # print "top assignment vals:"
+        # for (cost, assignment) in top_k_assignments:
+        #     print np.exp(-cost)
 
-
+        matrix=edge_matrix
         COMPARE_WAI = False
         print "COMPARE_WAI:", COMPARE_WAI
         test_gumbel_permanent_estimation(N=0, iters=20, num_samples=1, use_matrix=True, matrix=matrix)    
