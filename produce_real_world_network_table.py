@@ -23,6 +23,7 @@ def read_network_file(filename):
         sparse_matrix = nx.adjacency_matrix(graph)
         edge_matrix = np.asarray(sparse_matrix.todense())
     f.close()
+    edge_matrix = edge_matrix.astype(float)
     return edge_matrix
 
 def create_sinkhorn_values_in_table(matrix_filenames):
@@ -55,6 +56,8 @@ def estimate_acceptance_probability_with_nesting_upper_bounds(matrix, required_a
 
     Outputs:
     - p_hat: (float) estimate of the acceptance probability
+    - permanent_estimate: (float) estimate of the permanent when we don't tighten upper bounds
+    - permanent_estimate_with_tightening: (float) estimate of the permanent when we tighten upper bounds
     '''
     # be careful with setting COMPARE_WAI correctly 
     # (messy, created a global variable in constant_num_targets_sample_permenant to adjust
@@ -77,23 +80,33 @@ def estimate_acceptance_probability_with_nesting_upper_bounds(matrix, required_a
 
     total_sample_count = 0
     accepted_sample_count = 0
+    samples_since_last_accepted_sample = 0
+    permanent_estimate_with_tightening = 0
+    upper_bounds_since_last_accepted_sample = []
     while(True):
+        cur_total_matrix_upper_bound = MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, no_required_cells, compare_wai=compare_wai)
+        upper_bounds_since_last_accepted_sample.append(cur_total_matrix_upper_bound)
         #sample_association_01matrix_plusSlack was named and then changed, handles general non-negative matrices 
         sampled_association, sub_tree_slack = sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB=total_matrix_upper_bound, \
             prv_required_cells=[], depth=1, \
             global_row_indices=global_row_indices, global_col_indices=global_col_indices, with_replacement=True,\
-            tighten_slack=False, matrix_permanent_ubs=MATRIX_PERMANENT_UBS, best_row_cache=BEST_ROW_CACHE,\
+            tighten_slack=True, matrix_permanent_ubs=MATRIX_PERMANENT_UBS, best_row_cache=BEST_ROW_CACHE,\
             compare_wai=compare_wai)
 
         total_sample_count += 1
+        samples_since_last_accepted_sample += 1
         if sampled_association is not None: #we accepted a sample
             print"got a sample!"
             accepted_sample_count += 1
+            # permanent_estimate_with_tightening += cur_total_matrix_upper_bound/samples_since_last_accepted_sample
+            permanent_estimate_with_tightening += cur_total_matrix_upper_bound**2/np.sum(upper_bounds_since_last_accepted_sample)
+            samples_since_last_accepted_sample = 0
+            upper_bounds_since_last_accepted_sample = []
             if accepted_sample_count == required_accepted_sample_count:
                 p_hat = accepted_sample_count/total_sample_count
-                assert(total_matrix_upper_bound == MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, no_required_cells, compare_wai=compare_wai))
+                # assert(total_matrix_upper_bound == MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, no_required_cells, compare_wai=compare_wai))
                 permanent_estimate = p_hat*total_matrix_upper_bound
-                return p_hat, permanent_estimate
+                return p_hat, permanent_estimate, permanent_estimate_with_tightening
 
 
     return sampled_a_info
@@ -112,20 +125,23 @@ def create_sampling_values_in_table(matrix_filenames, required_accepted_sample_c
     and sample_association_01matrix_plusSlack must be called with tighten_slack=True in 
     estimate_acceptance_probability_with_nesting_upper_bounds (in this file)
 
-    Additionally, gumbel methods or a other methods must be used to compute the high probability bounds
+    Additionally, gumbel methods or another method must be used to compute the high probability bounds
     '''
     for compare_wai in [False, True]:
         for cur_matrix_filename in matrix_filenames:
             edge_matrix = read_network_file(cur_matrix_filename)
             t0 = time.time()
-            p_hat, permanent_estimate = estimate_acceptance_probability_with_nesting_upper_bounds(edge_matrix, required_accepted_sample_count, compare_wai)
+            p_hat, permanent_estimate, permanent_estimate_with_tightening = estimate_acceptance_probability_with_nesting_upper_bounds(edge_matrix, required_accepted_sample_count, compare_wai)
             t1 = time.time()
             print('-'*80)
             print(cur_matrix_filename)
             print("sampling bounds with compare_wai:", compare_wai)
-            print("ln(permanent_estimate)", np.log(permanent_estimate))
-            print("lower bound (estimate - .6 for 10 accepted samples) = ", np.log(permanent_estimate) - .6)
-            print("upper bound (estimate + .6 for 10 accepted samples) = ", np.log(permanent_estimate) + .6)
+            print("ln(permanent_estimate, no tightening)", np.log(permanent_estimate))
+            print("lower bound no tightening(estimate - .6 for 10 accepted samples) = ", np.log(permanent_estimate) - .6)
+            print("upper bound no tightening(estimate + .6 for 10 accepted samples) = ", np.log(permanent_estimate) + .6)
+            print("ln(permanent_estimate, with tightening)", np.log(permanent_estimate_with_tightening))
+            print("lower bound with tightening(estimate - .6 for 10 accepted samples) = ", np.log(permanent_estimate_with_tightening) - .6)
+            print("upper bound with tightening(estimate + .6 for 10 accepted samples) = ", np.log(permanent_estimate_with_tightening) + .6)
             print("p_hat", p_hat, 'required_accepted_sample_count:', required_accepted_sample_count)
             print("runtime", t1-t0)
 
@@ -150,11 +166,11 @@ if __name__ == "__main__":
     # matrix_filename = "./networkrepository_data/smaller_networks/can_24.mtx"
 
 
-    matrix_filenames = ["./networkrepository_data/edge_defined/ENZYMES_g192.edges",\
-                    "./networkrepository_data/edge_defined/ENZYMES_g230.edges",\
-                    "./networkrepository_data/edge_defined/ENZYMES_g479.edges",\
-                    "./networkrepository_data/cage5.mtx",\
-                    "./networkrepository_data/bcspwr01.mtx"]
+    # matrix_filenames = ["./networkrepository_data/edge_defined/ENZYMES_g192.edges",\
+    #                 "./networkrepository_data/edge_defined/ENZYMES_g230.edges",\
+    #                 "./networkrepository_data/edge_defined/ENZYMES_g479.edges",\
+    #                 "./networkrepository_data/cage5.mtx",\
+    #                 "./networkrepository_data/bcspwr01.mtx"]
     matrix_filenames = ["./networkrepository_data/edge_defined/ENZYMES_g479.edges",\
                     "./networkrepository_data/cage5.mtx",\
                     "./networkrepository_data/bcspwr01.mtx"]

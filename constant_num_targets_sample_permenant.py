@@ -104,7 +104,21 @@ class permanent_Upper_Bounds:
             # print 'hi!'
             # print 'compare_naive_max_weight_bound:', compare_naive_max_weight_bound
             # sleep(2)
-            upper_bound = minc_extended_UB2(sub_matrix)
+
+
+            upper_bound = minc_extended_UB2(sub_matrix) #STANDARD
+
+            # guess_at_col_scalings = np.reciprocal(np.sum(sub_matrix, axis=0))
+            # assert((np.sum(sub_matrix, axis=0) > 0).all())
+            # print"np.sum(sub_matrix, axis=0)", np.sum(sub_matrix, axis=0)
+            # print"np.reciprocal(np.sum(sub_matrix, axis=0))", np.reciprocal(np.sum(sub_matrix, axis=0))
+            # print"np.prod(guess_at_col_scalings)", np.prod(guess_at_col_scalings)
+            # print"guess_at_col_scalings", guess_at_col_scalings
+            # print sub_matrix
+            # upper_bound = minc_extended_UB2(sub_matrix * guess_at_col_scalings)/np.prod(guess_at_col_scalings)
+
+            # upper_bound = sink_horn_scale_then_soules(sub_matrix)
+
             # print "soules bound = ", upper_bound
             # upper_bound = conjectured_optimal_bound(sub_matrix)
             # print "nima bound =", upper_bound
@@ -892,6 +906,28 @@ def sinkhorn_scale(matrix, debug=False, max_iters=np.inf, do_cols = True, do_row
 
     return double_stochastic_matrix, cols_scaling, rows_scaling
 
+def sinkhorn_scale_alternate(matrix, lam=1):
+    #this may be not be faster
+    M = -np.log(matrix)/lam
+    assert(matrix.shape[0] == matrix.shape[1])
+    N = matrix.shape[0]
+    a = np.ones(N)
+    b = np.ones(N)
+    results = ot.sinkhorn(a,b,M,1,method='sinkhorn',numItermax=10000000000,log=True)
+    print("results:", results)
+    double_stochastic_matrix = results[0]
+    cols_scaling = results[1]['v']
+    rows_scaling = results[1]['u']
+    check_scaled_matrix = cols_scaling*np.expand_dims(rows_scaling, axis=1)*matrix
+    print("check_scaled_matrix:", check_scaled_matrix)
+    print(np.sum(check_scaled_matrix, axis=0))
+    print(np.sum(check_scaled_matrix, axis=1))
+    # print("cols_scaling:", cols_scaling)
+    # print("rows_scaling:", rows_scaling)
+    # print("double_stochastic_matrix:", double_stochastic_matrix)
+
+    return cols_scaling, rows_scaling, double_stochastic_matrix
+
 def conjectured_optimal_bound(matrix, return_lower_bound=False):
     #https://arxiv.org/pdf/1408.0976.pdf
     assert(matrix.shape[0] == matrix.shape[1])
@@ -1339,7 +1375,7 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
                 print 'sub_tree_slack', sub_tree_slack
                 print 'local_matrix[0, sampled_fixed_columns[0]]', local_matrix[0, sampled_fixed_columns[0]]
 
-            SAMPLE_WITH_REPLACEMENT_ONLY_TIGHTEN_CUR_LEVEL_SLACK = True
+            SAMPLE_WITH_REPLACEMENT_ONLY_TIGHTEN_CUR_LEVEL_SLACK = False
             # if permanentUB - (cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]) <= 0:
             # print "tighten_slack:", tighten_slack
             if tighten_slack:
@@ -3037,7 +3073,7 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
             # number_of_times_partition_called_vals_mean.append(np.mean(number_of_times_partition_called_list))
     fig = plt.figure()
     ax = plt.subplot(111)
-    ax.plot(n_vals_mean1, run_time_vals_mean1, 'r+', label='ours' , markersize=10)
+    ax.loglog(n_vals_mean1, run_time_vals_mean1, 'r+', label='ours' , markersize=10)
     # ax.plot(all_n_vals1, all_run_time_vals1, 'r+', label='run_time_vals_mean' , markersize=10)
 
     if pickle_file_paths2 is not None:
@@ -3058,7 +3094,7 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
                 run_time_vals_mean2.append(math.log(np.mean(runtimes_list)))
                 # run_time_vals_mean2.append(np.mean(runtimes_list))
 
-        ax.plot(n_vals_mean2, run_time_vals_mean2, 'y+', label='baseline' , markersize=10)
+        ax.loglog(n_vals_mean2, run_time_vals_mean2, 'y+', label='baseline' , markersize=10)
 
     matplotlib.rcParams.update({'font.size': 20})
 
@@ -3096,7 +3132,7 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
 
     return 
 
-    POLY_FIT = False #fit with some polynomials
+    POLY_FIT = True #fit with some polynomials
     if POLY_FIT:
         p3 = np.poly1d(np.polyfit(x=n_vals_mean, y=number_of_times_partition_called_vals_mean, deg=3))
         p5 = np.poly1d(np.polyfit(x=n_vals_mean, y=number_of_times_partition_called_vals_mean, deg=5))
@@ -4630,7 +4666,7 @@ if __name__ == "__main__":
     # print matrix.transpose()
     # print calc_permanent_rysers(matrix)
 
-    RUN_REAL_DATA_TEST = True
+    RUN_REAL_DATA_TEST = False
     if RUN_REAL_DATA_TEST:
         # print EXAMPLE_MOT_LOG_PROBS2        
         # matrix = np.exp(EXAMPLE_MOT_LOG_PROBS2)
@@ -4787,12 +4823,12 @@ if __name__ == "__main__":
     #                   pickle_file_paths2 =['./nestingProvedUB_noRowSearchFastTri_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
     #                    plot_filename='compareNoSearchNestingUB_soules_FastTri')
 
-    plot_runtime_vs_N(pickle_file_paths = ['./ourUBbound_findBestRowFastTri_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
-                      pickle_file_paths2 =['./nestingProvedUB_noRowSearchFastTri_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
-                       plot_filename='compareNoSearchNestingUB_soules_FastTri')
-    plot_runtime_vs_N(pickle_file_paths = ['./ourUBbound_findBestRowFastTri_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)],
-                      pickle_file_paths2 =['./nestingProvedUB_noRowSearchFastTri_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)],
-                       plot_filename='compareNoSearchNestingUB_soules_FastTriDiagMatrix')
+    plot_runtime_vs_N(pickle_file_paths = ['./neurips_plots/ourUBbound_findBestRowFastTri_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
+                      pickle_file_paths2 =['./neurips_plots/nestingProvedUB_noRowSearchFastTri_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
+                       plot_filename='./neurips_plots/compareNoSearchNestingUB_soules_FastTri')
+    plot_runtime_vs_N(pickle_file_paths = ['./neurips_plots/ourUBbound_findBestRowFastTri_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)],
+                      pickle_file_paths2 =['./neurips_plots/nestingProvedUB_noRowSearchFastTri_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)],
+                       plot_filename='./neurips_plots/compareNoSearchNestingUB_soules_FastTriDiagMatrix')
 
     # plot_runtime_vs_N(pickle_file_paths = [pickle_file_path])
     # plot_estimateAndExactPermanent_vs_N(pickle_file_paths = [pickle_file_path])
