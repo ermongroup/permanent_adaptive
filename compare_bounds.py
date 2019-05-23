@@ -497,7 +497,7 @@ def test_permanent_bound_tightness1(N):
 
     return minc_UB2, bregman_extended_upper_bound, exact_permanent
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
     # replot_fromPickle_permanent_bound_tightness_VS_n("./plots/loglog_bound_tightness_comparison_sinkhornSoules_uniformMatrix")
     replot_fromPickle_permanent_bound_tightness_VS_n("./plots/loglog_bound_tightness_comparison_sinkhornSoules_blockDiagk=%d"%3)
     # replot_fromPickle_permanent_bound_tightness_VS_n("./plots/loglog_bound_tightness_comparison_sinkhornSoules_blockDiagk=%d"%10)
