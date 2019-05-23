@@ -66,7 +66,8 @@ class permanent_Upper_Bounds:
     def print_bounds(self):
         print "MATRIX_PERMANENT_UBS:", self.upper_bounds_dictionary
 
-    def get_upper_bound(self, matrix_idx, required_cells, sub_matrix=None, compare_naive_max_weight_bound=False, verbose=False):
+    def get_upper_bound(self, matrix_idx, required_cells, sub_matrix=None, compare_naive_max_weight_bound=False,\
+                        verbose=False, compare_wai=None):
         '''
         Return an upper bound on the specified sub matrix.  
         If a cached (and possibly tightened) bound
@@ -82,6 +83,10 @@ class permanent_Upper_Bounds:
         Outputs:
         - upper_bound: (float) upper bound on the specified sub matrix
         '''
+        if compare_wai is not None:
+            global COMPARE_WAI
+            COMPARE_WAI = compare_wai
+
         assert(type(required_cells) == type((1,2))), type(required_cells)
         if sub_matrix is None:
             assert((matrix_idx, required_cells) in self.upper_bounds_dictionary), "permanent_Upper_Bounds.get_upper_bound called without specifying the sub_matrix without a cached upper bound"
@@ -96,6 +101,9 @@ class permanent_Upper_Bounds:
             self.upper_bounds_dictionary[(matrix_idx, required_cells)] = upper_bound
 
         else:
+            # print 'hi!'
+            # print 'compare_naive_max_weight_bound:', compare_naive_max_weight_bound
+            # sleep(2)
             upper_bound = minc_extended_UB2(sub_matrix)
             # print "soules bound = ", upper_bound
             # upper_bound = conjectured_optimal_bound(sub_matrix)
@@ -1144,7 +1152,8 @@ def find_best_row_to_partition_matrix_not_vectorized(matrix, prv_required_cells,
     return row_with_smallest_partitioned_UB
 
 def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_required_cells, depth, \
-    global_row_indices, global_col_indices, first_sample=False, with_replacement=False, tighten_slack=True):
+    global_row_indices, global_col_indices, first_sample=False, with_replacement=False, tighten_slack=True,\
+    matrix_permanent_ubs=None, best_row_cache=None, compare_wai=None):
     '''
     Inputs: 
         - matrix: (np.array of shap NxN)
@@ -1154,7 +1163,14 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
     '''
     # print "depth =", depth
     global MATRIX_PERMANENT_UBS
-
+    global BEST_ROW_CACHE
+    if matrix_permanent_ubs is not None:
+        MATRIX_PERMANENT_UBS = matrix_permanent_ubs
+    if best_row_cache is not None:
+        BEST_ROW_CACHE = best_row_cache
+    if compare_wai is not None:
+        global COMPARE_WAI
+        COMPARE_WAI = compare_wai 
     local_matrix = np.copy(matrix)
     N = local_matrix.shape[0]
     assert(N == local_matrix.shape[1])
@@ -1375,6 +1391,7 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
                 return sampled_association_global_indices, cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]
     else:
         print "sum_of_submatrix_UBs > permanentUB :(:(:("
+        print "MATRIX_PERMANENT_UBS.upper_bounds_dictionary:", MATRIX_PERMANENT_UBS.upper_bounds_dictionary
         print "matrix:"
         print matrix
         print "proposal_distribution:", proposal_distribution

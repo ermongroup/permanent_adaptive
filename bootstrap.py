@@ -50,7 +50,7 @@ def test_gumbel_MLE_concentration(num_gumbel_samples, additive_log_error=.1):
 def test_binomial_concentration(num_gumbel_samples, p=.5, additive_log_error=.1):
     binomial_off_by_more_than_1point1 = []
     accepted_samples_list = []
-    for idx in range(100000):
+    for idx in range(10000000):
         accepted_samples = 0
         total_samples = 0
         while accepted_samples < num_gumbel_samples:
@@ -109,9 +109,10 @@ def binomial_concentration_hoeffding(p, n, additive_log_error=.1):
 
 if __name__ == "__main__":
     # test_gumbel_mean_concentration(100000)
-    num_gumbel_samples = 1000
-    additive_log_error = .1
-    p=.000000000000001
+    num_gumbel_samples = 10
+    # additive_log_error = .1
+    additive_log_error = .6
+    p=.000005
     test_gumbel_MLE_concentration(num_gumbel_samples=num_gumbel_samples, additive_log_error=additive_log_error)
 
     test_binomial_concentration(num_gumbel_samples=num_gumbel_samples, p=p, additive_log_error=additive_log_error)
