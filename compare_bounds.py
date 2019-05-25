@@ -25,14 +25,19 @@ from itertools import combinations
 import operator as op
 from functools import reduce
 from gumbel_sample_permanent import optimized_minc_extened_UB2
+
+#download rbpf_fireworks from here: https://github.com/ermongroup/rbpf_fireworks
 # sys.path.insert(0, '/Users/jkuck/tracking_research/rbpf_fireworks/mht_helpers')
 sys.path.insert(0, '../rbpf_fireworks/mht_helpers/')
 
 from constant_num_targets_sample_permenant import conjectured_optimal_bound, sink_horn_scale_then_soules
 
-# sys.path.insert(0, '/Users/jkuck/research/bp_permanent')
-# import matlab.engine
-# eng = matlab.engine.start_matlab()
+#download "Approximating the Permanent with Belief Propagation" code
+#at http://people.cs.vt.edu/~bhuang/
+sys.path.insert(0, '/atlas/u/jkuck/bp_permanent')
+import matlab.engine
+eng = matlab.engine.start_matlab()
+
 
 def calc_permanent_rysers(matrix):
     '''
