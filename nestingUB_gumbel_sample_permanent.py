@@ -3757,7 +3757,7 @@ def sample_permutation(matrix_filename="./networkrepository_data/edge_defined/EN
 
 
 if __name__ == "__main__":
-    sample_from_permutation()
+    sample_permutation()
     exit(0)
 
     ITERS = 5
