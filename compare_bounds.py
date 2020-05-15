@@ -211,11 +211,11 @@ def singular_value_bound(matrix):
     permanent_upper_bound = largest_singular_value ** n
     return permanent_upper_bound
 
-def test_permanent_bound_tightness(N):
+def test_permanent_bound_tightness(N, k):
     use_diag_matrix = False
     if use_diag_matrix:
         # matrix, exact_permanent = create_diagonal2(N, k=10, zero_one=False)
-        matrix, exact_permanent = create_diagonal2(N, k=10, zero_one=False)
+        matrix, exact_permanent = create_diagonal2(N, k=k, zero_one=False)
 
     else:
         matrix = np.random.rand(N,N)
@@ -242,19 +242,23 @@ def test_permanent_bound_tightness(N):
     guess_optimize_soules = minc_extended_UB2(matrix * guess_at_col_scalings)/np.prod(guess_at_col_scalings)
     guess_hurt_soules = minc_extended_UB2(matrix * guess_at_hurt_col_scalings)/np.prod(guess_at_hurt_col_scalings)
 
-    lower_bound, conjectured_optimal_UB = conjectured_optimal_bound(matrix, return_lower_bound=True)
+    #gurvits_lower_bound (https://arxiv.org/pdf/1408.0976.pdf)
+    #is 'for a slightly modified variant of the Bethe permanent' (https://nimaanari.com/AR18.pdf, p. 4)
+    gurvits_lower_bound, gurvits_conjectured_optimal_UB = conjectured_optimal_bound(matrix, return_lower_bound=True)
 
     sinkhorn_soules_bound = sink_horn_scale_then_soules(matrix)
 
-    get_BP_lower_bound = False
+    get_BP_lower_bound = True
     if get_BP_lower_bound:
         matlab_matrix = eng.magic(N)
         for row in range(N):
             for col in range(N):
                 matlab_matrix[row][col] = matrix[row][col]
         bp_lower_bound = eng.estperslow(matlab_matrix)
+        nima_upper_bound = np.sqrt(2)**N * bp_lower_bound
     else:
         bp_lower_bound = 1
+        nima_upper_bound = 1
 
     print 'log(exact_permanent) =', np.log(exact_permanent)
     print 'log(bregman_extended_upper_bound) =', np.log(bregman_extended_upper_bound)
@@ -264,7 +268,9 @@ def test_permanent_bound_tightness(N):
     print 'log guess_hurt_soules =', np.log(guess_hurt_soules)
     print 'log bp_lower_bound =', np.log(bp_lower_bound)
     print 'log sinkhorn_soules_bound =', np.log(sinkhorn_soules_bound)
-    return bp_lower_bound, lower_bound, conjectured_optimal_UB, guess_optimize_soules, optimized_soules, minc_UB2, bregman_extended_upper_bound, exact_permanent, sinkhorn_soules_bound
+    return bp_lower_bound, nima_upper_bound, gurvits_lower_bound, gurvits_conjectured_optimal_UB,\
+     guess_optimize_soules, optimized_soules, minc_UB2, bregman_extended_upper_bound,\
+     exact_permanent, sinkhorn_soules_bound
 
 def get_bp_lower_bound(matrix):
     assert(matrix.shape[0] == matrix.shape[1])
@@ -276,15 +282,18 @@ def get_bp_lower_bound(matrix):
     bp_lower_bound = eng.estperslow(matlab_matrix)   
     return bp_lower_bound 
 
-def plot_permanent_bound_tightness_VS_n(max_n):
+def plot_permanent_bound_tightness_VS_n(max_n, k=10):
     law_ratios = []
     soules_ratios = []
     optimized_soules_ratios = []
     guess_optimized_soules_ratios = []
-    conjectured_optimal_bound_ratios = []
+    gurvits_conjectured_optimal_UB_bound_ratios = []
+    gurvits_lower_bound_ratios = []
     lower_bound_ratios = []
     bp_lower_bound_ratios = []
     sinkhorn_soules_ratios = []
+    nima_upper_bound_ratios = []
+
     n_vals = range(3, max_n)
 
     n_vals.extend(n_vals)
@@ -294,7 +303,8 @@ def plot_permanent_bound_tightness_VS_n(max_n):
     law_over_soules = []
     for n in n_vals:
         print "n=", n
-        bp_lower_bound, lower_bound, conjectured_optimal_UB, guess_optimize_soules, optimized_soules, soules_UB, law_UB, exact_permanent, sinkhorn_soules = test_permanent_bound_tightness(n)
+
+        bp_lower_bound, nima_upper_bound, gurvits_lower_bound, gurvits_conjectured_optimal_UB, guess_optimize_soules, optimized_soules, soules_UB, law_UB, exact_permanent, sinkhorn_soules = test_permanent_bound_tightness(n, k)
 
         cur_law_ratio = law_UB/exact_permanent
         law_ratios.append(cur_law_ratio)
@@ -308,10 +318,12 @@ def plot_permanent_bound_tightness_VS_n(max_n):
         guess_optimized_soules_ratios.append(guess_optimize_soules/exact_permanent)
 
 
-        conjectured_optimal_bound_ratios.append(conjectured_optimal_UB/exact_permanent)
-        lower_bound_ratios.append(lower_bound/exact_permanent)
+        gurvits_conjectured_optimal_UB_bound_ratios.append(gurvits_conjectured_optimal_UB/exact_permanent)
+        gurvits_lower_bound_ratios.append(gurvits_lower_bound/exact_permanent)
 
         bp_lower_bound_ratios.append(bp_lower_bound/exact_permanent)
+        nima_upper_bound_ratios.append(nima_upper_bound/exact_permanent)
+
         sinkhorn_soules_ratios.append(sinkhorn_soules/exact_permanent)
 
         fig = plt.figure()
@@ -321,12 +333,14 @@ def plot_permanent_bound_tightness_VS_n(max_n):
         # ax.semilogx(n_vals[:len(law_over_soules)], law_over_soules, 'x', label='law over soules')
         # ax.loglog(n_vals[:len(law_over_soules)], law_ratios, 'x', label='Law ratios')
         ax.semilogy(n_vals[:len(law_over_soules)], soules_ratios, 'x', label='Soules ratios')
-        ax.semilogy(n_vals[:len(law_over_soules)], guess_optimized_soules_ratios, 'x', label='guess optimize Soules ratios')
-        ax.semilogy(n_vals[:len(law_over_soules)], optimized_soules_ratios, 'x', label='optimized soules ratios')
-        ax.semilogy(n_vals[:len(law_over_soules)], conjectured_optimal_bound_ratios, 'x', label='conjectured optimal ratios')
-        ax.semilogy(n_vals[:len(law_over_soules)], sinkhorn_soules_ratios, 'x', label='sinkhorn soules ratios')
-        # ax.semilogy(n_vals[:len(law_over_soules)], bp_lower_bound_ratios, 'x', label='bp lower bound ratios')
-        # ax.semilogy(n_vals[:len(law_over_soules)], lower_bound_ratios, 'x', label='lower bound ratios')
+        # ax.semilogy(n_vals[:len(law_over_soules)], guess_optimized_soules_ratios, 'x', label='guess optimize Soules ratios')
+        # ax.semilogy(n_vals[:len(law_over_soules)], optimized_soules_ratios, 'x', label='optimized soules ratios')
+        ax.semilogy(n_vals[:len(law_over_soules)], nima_upper_bound_ratios, 'x', label='Nima UB')
+
+        ax.semilogy(n_vals[:len(law_over_soules)], gurvits_conjectured_optimal_UB_bound_ratios, 'x', label='Gurvits Conjectured UB')
+        # ax.semilogy(n_vals[:len(law_over_soules)], sinkhorn_soules_ratios, 'x', label='sinkhorn soules ratios')
+        ax.semilogy(n_vals[:len(law_over_soules)], bp_lower_bound_ratios, 'x', label='Bethe Permanent')        
+        ax.semilogy(n_vals[:len(law_over_soules)], gurvits_lower_bound_ratios, 'x', label='Gurvits Modified Bethe Permanent')
         # ax.plot(xp, np.log(p6), '-', label=r'$e^{-9.5} n^2 + e^{-20} n^5$')
 
         plt.title('Bound tightness comparison')
@@ -342,9 +356,87 @@ def plot_permanent_bound_tightness_VS_n(max_n):
             os.makedirs('./scaling_plots')
 
         # fig.savefig('loglog_bound_tightness_comparison_sinkhornSoules_uniformMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
-        fig.savefig('./scaling_plots/loglog_bound_tightness_comparison_sinkhornSoules_blockDiagk=10', bbox_extra_artists=(lgd,), bbox_inches='tight')    
-        plt.close()
+        # fig.savefig('./scaling_plots/loglog_bound_tightness_comparison_sinkhornSoules_blockDiagk=10', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+        # experiment_name = './plots/loglog_bound_tightness_comparison_sinkhornSoules_blockDiagk=%d'%k
+        experiment_name = './plots/loglog_bound_tightness_comparison_sinkhornSoules_uniformMatrix'
+        # fig.savefig('loglog_bound_tightness_comparison_sinkhornSoules_uniformMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+        fig.savefig(experiment_name, bbox_extra_artists=(lgd,), bbox_inches='tight')    
 
+        plt.close()
+        data_dictionary = {"law_over_soules":law_over_soules,
+                           "law_ratios":law_ratios,
+                           "soules_ratios":soules_ratios,
+                           "guess_optimized_soules_ratios":guess_optimized_soules_ratios,
+                           "optimized_soules_ratios":optimized_soules_ratios,
+                           "nima_upper_bound_ratios":nima_upper_bound_ratios,
+                           "gurvits_conjectured_optimal_UB_bound_ratios":gurvits_conjectured_optimal_UB_bound_ratios,
+                           "sinkhorn_soules_ratios":sinkhorn_soules_ratios,
+                           "bp_lower_bound_ratios":bp_lower_bound_ratios,
+                           "gurvits_lower_bound_ratios":gurvits_lower_bound_ratios,}
+        f = open(experiment_name + '.pickle', 'wb')
+        pickle.dump(data_dictionary, f)
+        f.close()                            
+
+def replot_fromPickle_permanent_bound_tightness_VS_n(file_name):
+    f = open(file_name + '.pickle')
+    data_dictionary = pickle.load(f)
+    f.close()
+
+    n_vals = []
+    gurvits_upper_bound_ratios = [] #gurvits_LB * 2^n
+    for idx in range(len(data_dictionary['bp_lower_bound_ratios'])):
+        print(np.log(data_dictionary['nima_upper_bound_ratios'][idx]/data_dictionary['bp_lower_bound_ratios'][idx])/\
+            np.log(np.sqrt(2)))
+        print(np.log(data_dictionary['nima_upper_bound_ratios'][idx]/data_dictionary['bp_lower_bound_ratios'][idx])/\
+            np.log(np.sqrt(2)))
+        n = int(np.log(data_dictionary['nima_upper_bound_ratios'][idx]/data_dictionary['bp_lower_bound_ratios'][idx])/\
+            np.log(np.sqrt(2))) #reverse calculate the value of n, should just save this if used in future...
+        assert(np.log(data_dictionary['nima_upper_bound_ratios'][idx]/data_dictionary['bp_lower_bound_ratios'][idx])/\
+            np.log(np.sqrt(2)) == np.log(data_dictionary['nima_upper_bound_ratios'][idx]/data_dictionary['bp_lower_bound_ratios'][idx])/\
+            np.log(np.sqrt(2)))
+        n_vals.append(n)
+        gurvits_upper_bound_ratios.append(data_dictionary['gurvits_lower_bound_ratios'][idx] * (2**n))
+
+    print("nvals", n_vals)
+
+
+    fig = plt.figure()
+    ax = plt.subplot(111)
+    for item in ([ax.xaxis.label, ax.yaxis.label] +
+             ax.get_xticklabels() + ax.get_yticklabels()):
+        item.set_fontsize(15)
+
+    # matplotlib.rcParams.update({'font.size': 30})
+
+    # ax.semilogx(n_vals, law_over_soules, 'x', label='law over soules')
+    # ax.loglog(n_vals, law_ratios, 'x', label='Law ratios')
+    # ax.semilogy(n_vals, guess_optimized_soules_ratios, 'x', label='guess optimize Soules ratios')
+    # ax.semilogy(n_vals, optimized_soules_ratios, 'x', label='optimized soules ratios')
+
+    # ax.semilogy(n_vals, gurvits_conjectured_optimal_UB_bound_ratios, 'x', label='Gurvits Conjectured UB')
+    ax.semilogy(n_vals, gurvits_upper_bound_ratios, 'x', label='Sinkhorn UB', markersize=10)
+    ax.semilogy(n_vals, data_dictionary['nima_upper_bound_ratios'], '+', label='Bethe UB', markersize=10)
+
+    ax.semilogy(n_vals, data_dictionary['soules_ratios'], 'x', label='Soules UB', markersize=10)
+
+    # ax.semilogy(n_vals, sinkhorn_soules_ratios, 'x', label='sinkhorn soules ratios')
+    ax.semilogy(n_vals, data_dictionary['bp_lower_bound_ratios'], '+', label='Bethe LB', markersize=10)        
+    ax.semilogy(n_vals, data_dictionary['gurvits_lower_bound_ratios'], 'x', label='Sinkhorn LB', markersize=10)
+    # ax.plot(xp, np.log(p6), '-', label=r'$e^{-9.5} n^2 + e^{-20} n^5$')
+
+    # plt.title('Uniform Matrices', fontsize=30)
+    plt.title('Block Diagonal, K=3', fontsize=30)
+    # plt.title('Permanent Bound Comparison', fontsize=20)
+    plt.xlabel('n (matrix dimension)', fontsize=25)
+    plt.ylabel('Bound/Permanent', fontsize=25)
+    # lgd = ax.legend(loc='upper left', prop={'size': 16},# bbox_to_anchor=(0.5, -.11),
+    #           fancybox=False, shadow=False, ncol=1, numpoints = 1)
+    # plt.setp(lgd.get_title(),fontsize='xx-small')
+
+    # plt.show()
+    # fig.savefig(file_name, bbox_extra_artists=(lgd,), bbox_inches='tight')    
+    fig.savefig(file_name, bbox_inches='tight')    
+    plt.close()
 
 def test_permanent_bound_tightness1(N):
     use_diag_matrix = True
@@ -428,7 +520,12 @@ def test_permanent_bound_tightness1(N):
 
     return minc_UB2, bregman_extended_upper_bound, exact_permanent
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
+    # replot_fromPickle_permanent_bound_tightness_VS_n("./plots/loglog_bound_tightness_comparison_sinkhornSoules_uniformMatrix")
+    replot_fromPickle_permanent_bound_tightness_VS_n("./plots/loglog_bound_tightness_comparison_sinkhornSoules_blockDiagk=%d"%3)
+    # replot_fromPickle_permanent_bound_tightness_VS_n("./plots/loglog_bound_tightness_comparison_sinkhornSoules_blockDiagk=%d"%10)
+    sleep(0234)
+
     # N = 17
     # matrix = np.random.rand(N,N)
     # m = eng.magic(N)
