@@ -7,7 +7,7 @@ Neurips 2019 Figure 4 plots were made with plot_log_likelihoods and plot_mean_sq
 Neurips 2019 Table 1 was made with produce_real_world_network_table.py
 
 
-##  To sample a permutation from the distribution defined by the permanent can `sample_permutation()` by running
+## To sample a permutation from the distribution defined by the permanent can `sample_permutation()` by running
 ```
 $ python nestingUB_gumbel_sample_permanent.py
 ```
