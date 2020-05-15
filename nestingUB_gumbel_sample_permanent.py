@@ -23,7 +23,7 @@ import scipy.io
 import copy
 import os
 import networkx as nx
-from operator import mul
+# import ot
 
 # from libc.stdlib cimport malloc, free
 # from libc.math cimport pow
@@ -32,17 +32,10 @@ from operator import mul
 # from permanent_model import compute_gumbel_upper_bound, approx_permanent3
 # from boundZ import calculate_gumbel_slack
 
-#download rbpf_fireworks from here: https://github.com/ermongroup/rbpf_fireworks
-# sys.path.insert(0, '/Users/jkuck/tracking_research/rbpf_fireworks/mht_helpers')
 sys.path.insert(0, '/atlas/u/jkuck/rbpf_fireworks/mht_helpers')
-from k_best_assignment import k_best_assignments
-
-from gumbel_sample_permanent import sample_log_permanent_with_gumbels
-
-CUR_DEBUG = False
+# from k_best_assignment import k_best_assignments
 
 
-# from tracking_specific_nestingUB_gumbel_sample_permanent import permanent_Upper_Bounds
 #'pymatgen' should be fastest, significantly
 #pick from ['munkres', 'scipy', 'pymatgen'], 
 ASSIGNMENT_SOLVER = 'pymatgen'
@@ -58,775 +51,95 @@ DEBUG1 = False
 
 FIRST_GUMBEL_LARGER = []
 BEST_ROW_CACHE={}
+matrix_permanent_UBs = {}
 COMPARE_WAI = False
-
-
-DEBUG_3 = False
-class permanent_Upper_Bounds:
-    def __init__(self):
-        self.upper_bounds_dictionary = {}
-
-    def print_bounds(self):
-        print "MATRIX_PERMANENT_UBS:", self.upper_bounds_dictionary
-
-    def get_upper_bound(self, matrix_idx, required_cells, sub_matrix=None, compare_naive_max_weight_bound=False, verbose=False):
-        '''
-        Return an upper bound on the specified sub matrix.  
-        If a cached (and possibly tightened) bound
-        exists return this, otherwise compute from scratch
-
-        Inputs:
-        - matrix_idx: (int) specifies an index for the original matrix
-        - required_cells: (tuple of tuples) specifies a submatrix
-        - sub_matrix: (numpy array) this is the actual submatrix whose permanent
-            we upper bound if the value isn't cached yet.  If None, return a cached
-            value or fail if the value is not cached.
-
-        Outputs:
-        - upper_bound: (float) upper bound on the specified sub matrix
-        '''
-        assert(type(required_cells) == type((1,2))), type(required_cells)
-        if sub_matrix is None:
-            assert((matrix_idx, required_cells) in self.upper_bounds_dictionary), "permanent_Upper_Bounds.get_upper_bound called without specifying the sub_matrix without a cached upper bound"
-        if (matrix_idx, required_cells) in self.upper_bounds_dictionary:
-            upper_bound = self.upper_bounds_dictionary[(matrix_idx, required_cells)]
-            if verbose:
-                print "cached UB for", (matrix_idx, required_cells), "=", upper_bound
-
-        #original matrix has shape (0, 0), we have no measurements and no targets.  probability of remaining in this state is 1
-        elif(required_cells == () and sub_matrix.shape[0] == 0):
-            upper_bound = 1.0
-            self.upper_bounds_dictionary[(matrix_idx, required_cells)] = upper_bound
-
-        else:
-            upper_bound = minc_extended_UB2(sub_matrix)
-            # print "soules bound = ", upper_bound
-            # upper_bound = conjectured_optimal_bound(sub_matrix)
-            # print "nima bound =", upper_bound
-            # upper_bound_1 = conjectured_optimal_bound(sub_matrix)
-            # print "nima bound =", upper_bound_1
-
-            # print "log soules bound = ", math.log(upper_bound), "log nima bound =", math.log(upper_bound_1)
-            # if upper_bound_1 < upper_bound:
-            #     upper_bound = upper_bound_1
-            if compare_naive_max_weight_bound:
-                (association_list, max_assignment) = find_max_assignment(sub_matrix)
-                N = sub_matrix.shape[0]
-                assert(N == sub_matrix.shape[1])
-                naive_max_weight_bound = max_assignment*math.factorial(N)
-                # if naive_max_weight_bound < upper_bound:
-                #     print "using naive_max_weight_bound!!!!!!!!!!!"
-                upper_bound = min(upper_bound, naive_max_weight_bound)
-
-            if verbose:
-                print "newly computed UB for", (matrix_idx, required_cells), "=", upper_bound, "exact_permanent =", calc_permanent_rysers(sub_matrix), "sub_matrix:"
-                assert(upper_bound >= calc_permanent_rysers(sub_matrix))
-                print sub_matrix
-            assert(upper_bound > -.000000001), (upper_bound, sub_matrix)
-            if upper_bound < 0:
-                upper_bound = 0
-            self.upper_bounds_dictionary[(matrix_idx, required_cells)] = upper_bound
-
-
-        # print "get_upper_bound returning", upper_bound, 'for', required_cells
-        return upper_bound
-
-
-    def tighten_upper_bound(self, matrix_idx, required_cells, slack, assert_zero=False):
-        '''
-        Tighten the specified upper bound by subtracting slack from it.
-
-        Inputs:
-        - matrix_idx: (int) specifies an index for the original matrix
-        - required_cells: (tuple of tuples) specifies a submatrix
-        - slack: (float) value to be subtracted from the specified upper bound
-        - assert_zero: (bool) if True, require the upper bound is zero after tightening,
-            don't correct errors or tighten slack.  Used if we sample an original matrix
-            with shape (0, 0) representing 0 measurements and 0 targets: only one thing
-            can happen here, remain in the same state
-
-        Outputs:
-        - corrected_slack: (float) if subtracting slack made the bound negative, presumably due to a numerical
-            error, we subtracted too much slack and reset the bound to zero.  This is the actual slack
-            we subtracted after correcting if necessary.
-        '''
-        # begin debugging
-        # print "type(required_cells)", type(required_cells)
-        # print "required_cells", required_cells
-        if CUR_DEBUG:
-            print 'tighten_upper_bound called slack=', slack
-        assert(type(required_cells) == type((1,2))), type(required_cells)
-        # if matrix_idx == 0 and required_cells == tuple([(0, 9)]):
-        #     print 'tighten_upper_bound called on 0, [(0, 9)], old upper bound =', self.upper_bounds_dictionary[(matrix_idx, required_cells)], 'new upper bound =', self.upper_bounds_dictionary[(matrix_idx, required_cells)] - slack
-        # print 'tighten_upper_bound called on', (matrix_idx, required_cells), 'old upper bound =', self.upper_bounds_dictionary[(matrix_idx, required_cells)], 'new upper bound =', self.upper_bounds_dictionary[(matrix_idx, required_cells)] - slack
-        
-        # end debugging
-
-        assert((matrix_idx, required_cells) in self.upper_bounds_dictionary), "permanent_Upper_Bounds.tighten_upper_bound called on a bound we haven't computed!!"
-        original_bound = self.upper_bounds_dictionary[(matrix_idx, required_cells)]
-        self.upper_bounds_dictionary[(matrix_idx, required_cells)] -= slack
-        if CUR_DEBUG:
-            print "self.upper_bounds_dictionary:", self.upper_bounds_dictionary
-        if assert_zero: #
-            assert(self.upper_bounds_dictionary[(matrix_idx, required_cells)] == 0.0)
-            return original_bound
-
-        elif self.upper_bounds_dictionary[(matrix_idx, required_cells)] < 0.0:
-            print "< 0.0, tried to subtract too much slack might be ok due to numerical errors but maybe check into more, bound tightened to", self.upper_bounds_dictionary[(matrix_idx, required_cells)]
-            # assert(False), "subtracting too much slack might be ok due to numerical errors, disabled for now" 
-            self.upper_bounds_dictionary[(matrix_idx, required_cells)] = 0.0
-            return original_bound
-
-        else:
-            return slack
-
-    def set_upper_bound(self, matrix_idx, required_cells, new_upper_bound, sub_matrix=None):
-        '''
-        Update the specified submatrix upper bound with a new bound, possibly computed in a 
-        different way, if the new bound is tighter.  NOT RIGHT NOW: Then check that nesting still holds.
-
-        don't require the bound always exists in the dictionary
-        check nesting not implemented yet!!
-
-        Inputs:
-        - matrix_idx: (int) specifies an index for the original matrix
-        - required_cells: (tuple of tuples) specifies a submatrix
-        - new_upper_bound: (float) the new upper bound
-        - sub_matrix: (numpy array) this is the actual submatrix whose permanent
-            upper bound we are updating      
-
-        '''
-        assert(type(required_cells) == type((1,2))), type(required_cells)
-        # if matrix_idx == 0 and required_cells == tuple([(0, 9)]):
-        #     print 'set_upper_bound called on 0, [(0, 9)], old upper bound =', self.upper_bounds_dictionary[(matrix_idx, required_cells)], 'new upper bound =', new_upper_bound
-        # print 'set_upper_bound called on', (matrix_idx, required_cells), 'old upper bound =', self.upper_bounds_dictionary[(matrix_idx, required_cells)], 'new upper bound =', new_upper_bound
-        self.upper_bounds_dictionary[(matrix_idx, required_cells)] = new_upper_bound
-        #self.check_nesting
-
-    def correct_errors_during_tightening(self, local_matrix, matrix_idx, prv_required_cells, global_row_indices, global_col_indices):
-        '''
-        correct for numerical errors during bound tightening
-
-        Outputs:
-        - upper_bound_increase: (float) we increased the specified upper bound by this much
-
-        '''
-        if self.upper_bounds_dictionary[(matrix_idx, tuple(prv_required_cells))] < 0.0:
-            self.upper_bounds_dictionary[(matrix_idx, tuple(prv_required_cells))] = 0.0
-            assert("false"), "negative bound during tightenting" #can take this out if just due to numerical errors, in for debugging now
-        assert(local_matrix.shape[0] == local_matrix.shape[1]) 
-        N = local_matrix.shape[0]
-
-
-        sum_of_nested_UBs = 0
-        for col in range(N):
-            cur_required_cells = tuple(prv_required_cells + [(global_row_indices[0], global_col_indices[col])])
-            cur_submatrix_UB = self.get_upper_bound(matrix_idx, cur_required_cells)
-            sum_of_nested_UBs += cur_submatrix_UB * local_matrix[0, col]
-
-        if sum_of_nested_UBs > self.get_upper_bound(matrix_idx, tuple(prv_required_cells)): #numerical error
-            upper_bound_increase = sum_of_nested_UBs - self.get_upper_bound(matrix_idx, tuple(prv_required_cells))
-            self.upper_bounds_dictionary[(matrix_idx, tuple(prv_required_cells))] = sum_of_nested_UBs
-         
-        else:
-            upper_bound_increase = 0
-
-        return upper_bound_increase
-
-    def check_nesting(self, local_matrix, matrix_idx, prv_required_cells, global_row_indices, global_col_indices, recurse=False, verbose=False):
-        '''
-        correct for numerical errors during bound tightening
-        '''
-        # print "permanent upper bounds:"
-        # print self.upper_bounds_dictionary
-        pass
-        assert(local_matrix.shape[0] == local_matrix.shape[1]) 
-        N = local_matrix.shape[0]
-        # assert(len(prv_required_cells) < 8)
-        sum_of_nested_UBs = 0
-        for col in range(N):
-            cur_submatrix = np.delete(local_matrix, col, 1) #delete columnumns
-            cur_submatrix = np.delete(cur_submatrix, 0, 0) #delete rows
-            # print "N:", N, "M:", M, "T:", T, "global_row_indices:", global_row_indices, "global_col_indices:", global_col_indices, "col:", col, "local_matrix:"
-            # print local_matrix
-            cur_required_cells = tuple(prv_required_cells + [(global_row_indices[0], global_col_indices[col])])
-            cur_submatrix_UB = self.get_upper_bound(matrix_idx, cur_required_cells, cur_submatrix)
-            sum_of_nested_UBs += cur_submatrix_UB * local_matrix[0, col]
-
-        assert(sum_of_nested_UBs <= self.get_upper_bound(matrix_idx, tuple(prv_required_cells))), (recurse, len(prv_required_cells), prv_required_cells, matrix_idx, sum_of_nested_UBs, self.get_upper_bound(matrix_idx, tuple(prv_required_cells)))
-        if verbose:
-            print "check_nesting called and checked out for prv_required_cells =", prv_required_cells, ".  sum_of_nested_UBs =", sum_of_nested_UBs, "self.get_upper_bound(matrix_idx, tuple(prv_required_cells)) =", self.get_upper_bound(matrix_idx, tuple(prv_required_cells))
-        if recurse: #THIS IS BUGGY, need to find the best row to partition on
-            for col in range(N):
-                cur_required_cells = prv_required_cells + [(global_row_indices[0], global_col_indices[col])]            
-                submatrix_global_row_indices = np.delete(global_row_indices, 0)
-                submatrix_global_col_indices = np.delete(global_col_indices, col)
-                cur_submatrix = np.delete(local_matrix, col, 1) #delete columnumns
-                cur_submatrix = np.delete(cur_submatrix, 0, 0) #delete rows
-                self.check_nesting(cur_submatrix, matrix_idx, cur_required_cells, submatrix_global_row_indices, submatrix_global_col_indices, recurse=False)
-
-
-class associationInfo:
-    def __init__(self, meas_grp_associations, dead_target_indices, complete_assoc_probability, bottom_prob, conditional_unassociated_probability, a_matrix,\
-        unassociated_target_count=0, unassociated_measurement_count=0, min_possible_conditional_unassociated_probability=None,
-        unassociated_measurements=None, unassociated_targets=None):
-        '''
-        Inputs:
-        -meas_grp_associations: (list of ints) each element specifices the assocation of a measurement group
-            [0,T-1]: target association
-            T: birth
-            -1: clutter
-        -dead_target_indices: (list of ints) each element specifies the index of a dead target
-        -complete_assoc_probability: (float) prior probability of target states multipled by
-            probability of all associations (obtained by multiplying all
-            matrix elements and multiplying sampled birth/clutter and life/death probabilities).  This is proportional
-            (by a normalization constant that is the same for all particles) to the final probability of the target states
-            after measurement associations.
-        -bottom_prob: (float) obtained by multiplying matrix elements in the bottom T rows, without multiplying
-            sampled birth/clutter probabilities.  This is useful because we need to subtract T! times this quantify
-            from the corresponding permanent upper bound (and propogate to parents as slack)
-        -conditional_unassociated_probability: (float) product of conditional birth/clutter and life/death probabilities
-        -matrix_index:(int) specifies which matrix (particle representing the pre-association state) this sample was drawn from
-        -unassociated_target_count: (int) the number of targets that are not associated with a measurement
-        -unassociated_measurement_count: (int) the number of measurements that are not associated with a target
-        -unassociated_measurements: (list of ints) each element is the index of a measurement that is not associated with a target
-        -unassociated_targets: (list of ints) each element is the index of a target that is not associated with a measurement
-        '''
-
-
-        self.meas_grp_associations = meas_grp_associations
-        self.dead_target_indices = dead_target_indices
-        self.complete_assoc_probability = complete_assoc_probability
-        self.bottom_prob = bottom_prob
-        self.conditional_unassociated_probability = conditional_unassociated_probability
-        self.matrix_index = None
-
-        self.unassociated_target_count = unassociated_target_count
-        self.unassociated_measurement_count = unassociated_measurement_count
-        self.min_possible_conditional_unassociated_probability = min_possible_conditional_unassociated_probability
-        # if a_matrix.T == 0: #sketchy is ther something better? also we seemed to get upper bound > 0 on a matrix of size (0,0) without this?!?!
-        #     self.bottom_prob = 0
-
-        self.unassociated_measurements = unassociated_measurements
-        self.unassociated_targets = unassociated_targets
-
-
-class associationMatrix:
-    def __init__(self, matrix, M, T, conditional_birth_probs, conditional_death_probs, prior_prob):
-        '''
-        Inputs:
-        - matrix: numpy matrix with dimensions (M+T)x(M+T) containing probabilities
-            [a_11    ...     a_1T   um_1 0   ...  0]
-            [.               .      0   .          ]
-            [.               .      .      .       ]
-            [.               .      .         .    ]
-            [a_M1    ...     a_MT   0    ...   um_M]
-            [ut_1    ...     ut_T   1    ...      1]
-            [.               .      .             .]
-            [.               .      .             .]
-            [ut_1    ...     ut_T   1    ...      1]    
-            - upper left quadrant is a MxT submatrix and composed of a_ij = the association probability of
-              measurement i to target j
-            - upper right quadrant is an MxM submatrix.  Row i is composed of M repetitions of 
-              um_i = the probability that measurement i is unassociated with a target (marginalized over whether the
-              measurement is clutter or a birth)
-            - lower left quadrant is a TxT submatrix.  It is a diagonal matrix with elements ut_i = the
-              probability that target i doesn't emit a measuremnt (marginalized over
-              whether it lives or dies)
-            - lower right quadrant is an TxM submatrix of all 1's
-        - M: (int) number of measurements, indicates form of the association matrix
-        - T: (int) number of targets, indicates form of the association matrix
-        - conditional_birth_probs: (list of length M) probability of birth for each measurement, given that it is 
-            not associated with a target (it is either birth or clutter)
-        - conditional_death_probs: (list of length T) probability of death for each target, given that it is not
-            associated with a measurement
-        - prior_prob: (float) the probability of this state of targets before seeing these measurements
-
-        '''        
-        self.matrix = matrix
-        self.M = M
-        self.T = T
-        self.conditional_birth_probs = conditional_birth_probs
-        self.conditional_death_probs = conditional_death_probs
-        self.prior_prob = prior_prob
-
-
-def multi_matrix_sample_associations_without_replacement(num_samples, all_association_matrices, try_rescaling_all_matrices=True, verbose=False,\
-    allow_exhausting_samples=True):
-    '''
-    Inputs:
-    - all_association_matrices: list of associationMatrix
-    - allow_exhausting_samples: (bool) if True we allow for the possibility that we sample every state and return fewer than num_samples
-        samples.  In tracking this is possible, e.g. going from 0 targets to 1 target there are very few states or even going from 0 to 10
-        targets there are few states if we require birth.
-    Outputs
-    - samples: (list of associationInfo)
-    '''
-    # print "multi_matrix_sample_associations_without_replacement called"
-    random_number = np.random.random()
-    matrix_file_name = './%f' % random_number
-    if not os.path.exists(os.path.dirname(matrix_file_name)):
-        try:
-            os.makedirs(os.path.dirname(matrix_file_name))
-        except OSError as exc: # Guard against race condition
-            if exc.errno != errno.EEXIST:
-                raise
-
-    # print "saving matrices in %s" % matrix_file_name    
-    # f = open(matrix_file_name, 'w')
-    # pickle.dump(all_association_matrices, f)
-    # f.close()
-
-    # debugging
-    # for association_matrix in all_association_matrices:
-    #     print "before rescalingcalc_permanent_rysers(association_matrix.matrix) =", calc_permanent_rysers(association_matrix.matrix)
-    #     association_matrix.matrix /= np.max(association_matrix.matrix)
-    #     print "after rescalingcalc_permanent_rysers(association_matrix.matrix) =", calc_permanent_rysers(association_matrix.matrix)
-    # print "all_association_matrices[0].matrix:"
-    # print all_association_matrices[0].matrix
-
-    global MATRIX_PERMANENT_UBS
-    global BEST_ROW_CACHE
-    global SAMPLED_BIRTHS_DEATHS
-    global UB_TIGHTENING_COUNTS
-
-    MATRIX_PERMANENT_UBS = permanent_Upper_Bounds()
-    BEST_ROW_CACHE = {} 
-    SAMPLED_BIRTHS_DEATHS = defaultdict(list)
-    UB_TIGHTENING_COUNTS = {}
-
-    # print "reset caches:"
-
-    # MATRIX_PERMANENT_UBS.print_bounds()
-    # print "BEST_ROW_CACHE:", BEST_ROW_CACHE
-    # print "SAMPLED_BIRTHS_DEATHS:", SAMPLED_BIRTHS_DEATHS
-
-    #begin debugging
-    # (association_list, max_assignment) = find_max_assignment(all_association_matrices[0].matrix)
-    # print "maximum assignment =", max_assignment, "maximum assignment*math.factorial(N) =", max_assignment*math.factorial(all_association_matrices[0].matrix.shape[0]), 'for assignment:', association_list
-    # print "all_association_matrices[0].prior_prob*max_assignment =", all_association_matrices[0].prior_prob*max_assignment,
-    # print "all_association_matrices[0].matrix:"
-    # print all_association_matrices[0].matrix
-    #end debugging
-
-    USE_FLOAT64 = False
-    if USE_FLOAT64: #increase precision
-        for matrix_idx, a_matrix in enumerate(all_association_matrices):
-            a_matrix.matrix = np.array(a_matrix.matrix, dtype='float64')
-
-    if try_rescaling_all_matrices:
-        for matrix_idx, a_matrix in enumerate(all_association_matrices):
-            N = a_matrix.matrix.shape[0]
-            if N < 2: #don't need to rescale small matrices and code below crashes
-                continue
-            assert(N == a_matrix.matrix.shape[1])
-            M_remaining = 0
-            matrix_contains_no_targets = False
-            while a_matrix.matrix[M_remaining, N-1] != 1:
-                M_remaining += 1
-                if M_remaining == N:
-                    matrix_contains_no_targets = True
-                    break
-            if matrix_contains_no_targets:
-                continue
-
-            T_remaining=0
-            while a_matrix.matrix[M_remaining, T_remaining] != 1:
-                T_remaining += 1
-
-            column_rescalings = a_matrix.matrix[M_remaining, :T_remaining]
-            permanent_rescaling = np.prod(column_rescalings)
-            rescaled_matrix = copy.copy(a_matrix.matrix)
-            rescaled_matrix[:,:T_remaining] /= column_rescalings
-
-            original_permanent_UB = minc_extended_UB2(a_matrix.matrix)
-            rescaled_permanent_UB = minc_extended_UB2(rescaled_matrix)
-            # print
-            # print '-'*80
-            # print "a_matrix.matrix:"
-            # print a_matrix.matrix
-            # (association_list, max_assignment) = find_max_assignment(a_matrix.matrix)
-            # print "maximum assignment =", max_assignment, "maximum assignment*math.factorial(N) =", max_assignment*math.factorial(N)
-
-            # print "original_permanent_UB =", original_permanent_UB, "rescaled_permanent_UB =", rescaled_permanent_UB*permanent_rescaling
-            if rescaled_permanent_UB*permanent_rescaling < original_permanent_UB:
-                a_matrix.matrix = rescaled_matrix
-                a_matrix.prior_prob *= permanent_rescaling
-
-            # print '-'*80
-            # print
-
-    # sleep(323)
-    assert(num_samples >= 1)
-    samples = []
-    while len(samples) < num_samples:
-        if verbose:
-            print '@'*80
-            MATRIX_PERMANENT_UBS.print_bounds()
-            print
-
-        distribution_over_matrices = []
-        sum_of_UBs = 0 #to check how much bounds are tightened
-        for matrix_idx, a_matrix in enumerate(all_association_matrices):
-            permanent_UB = MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, required_cells=(), sub_matrix=a_matrix.matrix)
-            sum_of_UBs += permanent_UB
-            if CUR_DEBUG:
-                print 'matrix', matrix_idx, 'upper_bound =', permanent_UB, 'prior', a_matrix.prior_prob
-                print a_matrix.matrix
-            if verbose:
-                print "matrix_idx, permanent_UB, a_matrix.prior_prob:", matrix_idx, permanent_UB, a_matrix.prior_prob
-            # print "matrix_idx, permanent_UB, a_matrix.prior_prob:", matrix_idx, permanent_UB, a_matrix.prior_prob
-            distribution_over_matrices.append(a_matrix.prior_prob*permanent_UB)
-        # print "sum_of_UBs:", sum_of_UBs,
-            
-        # sleep(232)
-        if CUR_DEBUG:
-            print "distribution_over_matrices:", distribution_over_matrices
-        if verbose:
-            print "distribution_over_matrices before normalization: ", distribution_over_matrices
-        if allow_exhausting_samples and np.sum(distribution_over_matrices) == 0:
-            break
-        assert(np.sum(distribution_over_matrices) > 0), (np.sum(distribution_over_matrices), distribution_over_matrices)
-        distribution_over_matrices /= np.sum(distribution_over_matrices)
-        if verbose:
-            print "distribution_over_matrices after normalization: ", distribution_over_matrices
-        sampled_idx = np.random.choice(len(distribution_over_matrices), p=distribution_over_matrices)
-        sampled_matrix = all_association_matrices[sampled_idx]
-        if verbose:
-            print '#'*80
-            print 'sampling from matrix with index:', sampled_idx, 'with UB =', MATRIX_PERMANENT_UBS.get_upper_bound(sampled_idx, required_cells=()), 'and prior probability =', all_association_matrices[sampled_idx].prior_prob
-        sampled_a_info = sample_association_single_matrix(sampled_matrix, sampled_idx)
-        if sampled_a_info is None:
-            # print "sample rejected"
-            continue
-        sampled_a_info.matrix_index = sampled_idx
-        samples.append(sampled_a_info)
-        print "got a sample! now we have", len(samples), "samples", sampled_a_info.complete_assoc_probability, sampled_a_info.bottom_prob,
-        # sampled_a_info.print_info()
-
-    print "multi_matrix_sample_associations_without_replacement returning", len(samples), "samples"
-    assert(len(samples) > 0)
-    return samples
-
-def sink_horn_scale_then_soules(matrix):
-    double_stochastic_matrix, cols_scaling, rows_scaling = sinkhorn_scale(matrix)
-    permanent_rescaling = np.prod(cols_scaling) * np.prod(rows_scaling)
-    scaled_upper_bound = minc_extended_UB2(double_stochastic_matrix)
-    upper_bound = scaled_upper_bound/permanent_rescaling
-    return upper_bound
-
-
-def single_matrix_sample_associations_with_replacement(num_samples, single_association_matrices, try_rescaling_all_matrices=False, verbose=False,\
-                                                        verbose1=False, debug=False):
-    '''
-    Inputs:
-    - single_association_matrices: list containing a single associationMatrix (hacked this quickly)
-    Outputs
-    - sample: a single associationInfo
-    - permanent_estimate: (float) estimate of permanent
-    '''
-
-    assert(num_samples == 1)
-    assert(len(single_association_matrices) == 1)
-    # print "multi_matrix_sample_associations_without_replacement called"
-    random_number = np.random.random()
-    matrix_file_name = './%f' % random_number
-    if not os.path.exists(os.path.dirname(matrix_file_name)):
-        try:
-            os.makedirs(os.path.dirname(matrix_file_name))
-        except OSError as exc: # Guard against race condition
-            if exc.errno != errno.EEXIST:
-                raise
-
-    # print "saving matrices in %s" % matrix_file_name    
-    # f = open(matrix_file_name, 'w')
-    # pickle.dump(single_association_matrices, f)
-    # f.close()
-
-    # debugging
-    # for association_matrix in single_association_matrices:
-    #     print "before rescalingcalc_permanent_rysers(association_matrix.matrix) =", calc_permanent_rysers(association_matrix.matrix)
-    #     association_matrix.matrix /= np.max(association_matrix.matrix)
-    #     print "after rescalingcalc_permanent_rysers(association_matrix.matrix) =", calc_permanent_rysers(association_matrix.matrix)
-    # print "single_association_matrices[0].matrix:"
-    # print single_association_matrices[0].matrix
-
-    global MATRIX_PERMANENT_UBS
-    global BEST_ROW_CACHE
-    global SAMPLED_BIRTHS_DEATHS
-    global UB_TIGHTENING_COUNTS
-
-    MATRIX_PERMANENT_UBS = permanent_Upper_Bounds()
-    BEST_ROW_CACHE = {} 
-    SAMPLED_BIRTHS_DEATHS = defaultdict(list)
-    UB_TIGHTENING_COUNTS = {}
-
-    # print "reset caches:"
-
-    # MATRIX_PERMANENT_UBS.print_bounds()
-    # print "BEST_ROW_CACHE:", BEST_ROW_CACHE
-    # print "SAMPLED_BIRTHS_DEATHS:", SAMPLED_BIRTHS_DEATHS
-
-    #begin debugging
-    # (association_list, max_assignment) = find_max_assignment(single_association_matrices[0].matrix)
-    # print "maximum assignment =", max_assignment, "maximum assignment*math.factorial(N) =", max_assignment*math.factorial(single_association_matrices[0].matrix.shape[0]), 'for assignment:', association_list
-    # print "single_association_matrices[0].prior_prob*max_assignment =", single_association_matrices[0].prior_prob*max_assignment,
-    # print "single_association_matrices[0].matrix:"
-    # print single_association_matrices[0].matrix
-    #end debugging
-
-    USE_FLOAT64 = False
-    if USE_FLOAT64: #increase precision
-        for matrix_idx, a_matrix in enumerate(single_association_matrices):
-            a_matrix.matrix = np.array(a_matrix.matrix, dtype='float64')
-
-    if try_rescaling_all_matrices:
-        for matrix_idx, a_matrix in enumerate(single_association_matrices):
-            N = a_matrix.matrix.shape[0]
-            if N < 2: #don't need to rescale small matrices and code below crashes
-                continue
-            assert(N == a_matrix.matrix.shape[1])
-            M_remaining = 0
-            matrix_contains_no_targets = False
-            while a_matrix.matrix[M_remaining, N-1] != 1:
-                M_remaining += 1
-                if M_remaining == N:
-                    matrix_contains_no_targets = True
-                    break
-            if matrix_contains_no_targets:
-                continue
-
-            T_remaining=0
-            while a_matrix.matrix[M_remaining, T_remaining] != 1:
-                T_remaining += 1
-
-            column_rescalings = a_matrix.matrix[M_remaining, :T_remaining]
-            permanent_rescaling = np.prod(column_rescalings)
-            rescaled_matrix = copy.copy(a_matrix.matrix)
-            rescaled_matrix[:,:T_remaining] /= column_rescalings
-
-            original_permanent_UB = minc_extended_UB2(a_matrix.matrix)
-            rescaled_permanent_UB = minc_extended_UB2(rescaled_matrix)
-            # print
-            # print '-'*80
-            # print "a_matrix.matrix:"
-            # print a_matrix.matrix
-            # (association_list, max_assignment) = find_max_assignment(a_matrix.matrix)
-            # print "maximum assignment =", max_assignment, "maximum assignment*math.factorial(N) =", max_assignment*math.factorial(N)
-
-            # print "original_permanent_UB =", original_permanent_UB, "rescaled_permanent_UB =", rescaled_permanent_UB*permanent_rescaling
-            if rescaled_permanent_UB*permanent_rescaling < original_permanent_UB:
-                a_matrix.matrix = rescaled_matrix
-                a_matrix.prior_prob *= permanent_rescaling
-
-            # print '-'*80
-            # print
-
-    # sleep(323)
-    assert(num_samples >= 1)
-
-    upper_bound = minc_extended_UB2(single_association_matrices[0].matrix)
-    upper_bound_1 = conjectured_optimal_bound(single_association_matrices[0].matrix)
-    upper_bound_2 = optimized_minc_extened_UB2(single_association_matrices[0].matrix)
-    print "log soules bound = ", math.log(upper_bound), "log nima bound =", math.log(upper_bound_1), "log optimized soules bound = ", math.log(upper_bound_2),
-
-    SINK_HORN_RESCALE = True
-    if SINK_HORN_RESCALE:
-        orig_matrix = single_association_matrices[0].matrix
-        double_stochastic_matrix, cols_scaling, rows_scaling = sinkhorn_scale(single_association_matrices[0].matrix)
-        permanent_rescaling = np.prod(cols_scaling) * np.prod(rows_scaling)
-        single_association_matrices[0].matrix = double_stochastic_matrix
-        single_association_matrices[0].prior_prob /= permanent_rescaling
-
-        upper_bound = minc_extended_UB2(single_association_matrices[0].matrix)
-        upper_bound_1 = conjectured_optimal_bound(single_association_matrices[0].matrix)
-        print "after sinkhorn scaling log soules bound = ", math.log(upper_bound*single_association_matrices[0].prior_prob), "log nima bound =", math.log(upper_bound_1*single_association_matrices[0].prior_prob)
-        
-        print "check sink_horn_scale_then_soules(matrix)", math.log(sink_horn_scale_then_soules(orig_matrix))
-        # print
-        # print
-        # print '&'*80
-
-        double_stochastic_matrix_early_stopping1, cols_scaling_early_stopping1, rows_scaling_early_stopping1 = sinkhorn_scale(orig_matrix, max_iters = 1, do_cols = True, do_rows=False)
-        permanent_rescaling_early_stopping1 = np.prod(cols_scaling_early_stopping1) * np.prod(rows_scaling_early_stopping1)
-        prior_prob_early_stopping1 = 1/permanent_rescaling_early_stopping1
-        upper_bound_early_stopping1 = minc_extended_UB2(double_stochastic_matrix_early_stopping1)
-        # print "rows_scaling_early_stopping1:", rows_scaling_early_stopping1
-        # print "upper_bound_early_stopping1:", upper_bound_early_stopping1
-        # print "prior_prob_early_stopping1:", prior_prob_early_stopping1
-        print "after sinkhorn scaling, early stopping 1, log soules bound = ", math.log(upper_bound_early_stopping1*prior_prob_early_stopping1), "1/prior_prob_early_stopping1 =", 1/prior_prob_early_stopping1
-        
-        guess_at_col_scalings = np.reciprocal(np.sum(orig_matrix, axis=0))
-        guess_optimize_soules = minc_extended_UB2(orig_matrix * guess_at_col_scalings)/np.prod(guess_at_col_scalings)
-        # print "minc_extended_UB2(orig_matrix * guess_at_col_scalings):", minc_extended_UB2(orig_matrix * guess_at_col_scalings)
-        # print "1/np.prod(guess_at_col_scalings) =", 1/np.prod(guess_at_col_scalings)
-        print "log guess_optimize_soules = ", math.log(guess_optimize_soules)
-        # print "np.reciprocal(np.sum(orig_matrix, axis=0)):", np.reciprocal(np.sum(orig_matrix, axis=0))
-        # print "orig_matrix * guess_at_col_scalings:", orig_matrix * guess_at_col_scalings
-        # print '&'*80
-        # print 
-        # print
-        double_stochastic_matrix_early_stopping10, cols_scaling_early_stopping10, rows_scaling_early_stopping10 = sinkhorn_scale(orig_matrix, max_iters = 10)
-        permanent_rescaling_early_stopping10 = np.prod(cols_scaling_early_stopping10) * np.prod(rows_scaling_early_stopping10)
-        prior_prob_early_stopping10 = 1/permanent_rescaling_early_stopping10
-        upper_bound_early_stopping10 = minc_extended_UB2(double_stochastic_matrix_early_stopping10)
-        print "after sinkhorn scaling, early stopping 10, log soules bound = ", math.log(upper_bound_early_stopping10*prior_prob_early_stopping10)
-
-        upper_bound = minc_extended_UB2(single_association_matrices[0].matrix)
-        upper_bound_1 = conjectured_optimal_bound(single_association_matrices[0].matrix)
-
-        print
-
-    #initializing the upper bound to match other code
-    init_permanent_UB = MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx=0, required_cells=(), sub_matrix=single_association_matrices[0].matrix)
-
-    if verbose1:
-        #for debuging
-        exact_permanent = calc_permanent_rysers(single_association_matrices[0].matrix)
-
-
-    #get a single sample
-    rejected_sample_count = 0
-    accepted_sample_count = 0
-    # print 'initial samples'    
-    while True:
-        cur_permanent_ub = MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx=0, required_cells=())
-        # print "cur_permanent_ub =", cur_permanent_ub
-
-        if verbose:
-            print '@'*80
-            MATRIX_PERMANENT_UBS.print_bounds()
-            print
-
-        sampled_a_info = sample_association_single_matrix(single_association_matrices[0], 0, with_replacement=True, tighten_slack=True)
-        if sampled_a_info is None: # sample rejected
-            if verbose1:
-                print 'r', 
-            rejected_sample_count += 1
-        else: # sample accepted
-            if verbose1:
-                print 'a', 
-            accepted_sample_count += 1
-            if accepted_sample_count == 1: #save the first sample we get
-                sampled_a_info.matrix_index = 0
-                sample = sampled_a_info
-
-        if accepted_sample_count == 5:
-            break
-            # pass
-        if verbose1:
-            pass
-            # print ',    p for this sample =', exact_permanent/cur_permanent_ub, 'after tightening during this call p =', exact_permanent/MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx=0, required_cells=())
-
-    if verbose1:
-        print
-
-
-    #estimate permanent
-    permanent_estimate = 0
-    new_sample_count = 1*rejected_sample_count + accepted_sample_count
-    new_accepted_sample_count = 0
-    if verbose1:
-        print 'samples when estimating permanent'
-    for sample_idx in range(new_sample_count):
-        cur_permanent_ub = MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx=0, required_cells=())
-        # print "cur_permanent_ub =", cur_permanent_ub
-        sampled_a_info = sample_association_single_matrix(single_association_matrices[0], 0, with_replacement=True, tighten_slack=False)
-        if sampled_a_info is None: # print "sample rejected"
-            if verbose1:
-                print 'r',
-            # permanent_estimate += 0.0
-        else:
-            if verbose1:
-                print 'a',
-            permanent_estimate += cur_permanent_ub/(new_sample_count)
-            new_accepted_sample_count += 1
-        if verbose1:
-            pass
-            # print ',    p for this sample =', exact_permanent/cur_permanent_ub, 'after tightening during this call p =', exact_permanent/MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx=0, required_cells=())
-
-    if debug:
-        exact_permanent = calc_permanent_rysers(single_association_matrices[0].matrix)# permanent_check(single_association_matrices[0].matrix)
-        p_init = exact_permanent/init_permanent_UB
-        p_final = exact_permanent/MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx=0, required_cells=(), sub_matrix=single_association_matrices[0].matrix)
-        if not (p_final >= p_init and p_final <= 1.0 and p_init >= 0.0):
-            f = open('problem_matrix.pickle', 'wb')
-            pickle.dump(single_association_matrices[0].matrix, f)
-            f.close()             
-
-        assert(p_final >= p_init and p_final <= 1.0 and p_init >= 0.0), (p_final, p_init)
-    if verbose1:
-        print "new_accepted_sample_count:", new_accepted_sample_count, 'initial rejected_sample_count:', rejected_sample_count, 'p_init =', p_init, 'p_final =', p_final,
-        print 'p_final_hat =', new_accepted_sample_count/new_sample_count
-        print 'permanent_estimate/exact_permanent:', permanent_estimate/exact_permanent
-        print
-        print
-
-    return sample, permanent_estimate
-
+#
+#
+#References:
+# [1] K. G. Murty, "Letter to the Editor--An Algorithm for Ranking all the Assignments in Order of
+#     Increasing Cost," Oper. Res., vol. 16, no. May 2016, pp. 682-687, 1968.
+#
+# [2] I. J. Cox and M. L. Miller, "On finding ranked assignments with application to multitarget
+#     tracking and motion correspondence," IEEE Trans. Aerosp. Electron. Syst., vol. 31, no. 1, pp.
+#     486-489, Jan. 1995.
 
 # @profile
-def sample_association_single_matrix(a_matrix, matrix_idx, verbose=False, with_replacement=False, tighten_slack=True):
+def sample_log_permanent_with_gumbels(matrix, clear_caches_new_matrix):
     '''
 
     Inputs:
-    - a_matrix: (associationMatrix)
-    - matrix_idx: (int) the index of the original association matrix, when dealing with multiple states in the
-        sequential setting
+    - matrix: (numpy array) all entries should be non-negative
 
-    Output: either
-    -None: we sampled slack
-    OR
-    -sampled_a_info: (associationInfo)
+    Output:
+    - sampled_association: a list of pairs where each pair represents an association 
+        in the assignment (1's in assignment matrix)
+    - sample_of_logZ: (float), a sample from a Gumbel variable with location=ln(Z) and scale=1
     '''
-    global MATRIX_PERMANENT_UBS
+    # key: tuple of (required_cells, submatrix), where
+    #       required_cells: tuple of ((row, col), (row, col), ...)
+    #       submatrix: tuple of ((a, b, c, ...), (d, e, f, ...), ...)
+    # value: (int) upper bound on the permanent
+    # print "-"*80
+    # print "sample_log_permanent_with_gumbels just called"
+    # print "exact_permanent =", calc_permanent_rysers(matrix)
+    # print "matrix:", matrix
+
+    # BEST_ROW_CACHE = {}
+    global matrix_permanent_UBs
     global BEST_ROW_CACHE
-
-    if a_matrix.matrix.shape[0] == 0: #0 measurements and 0 targets
-        sampled_a_info = associationInfo(meas_grp_associations=[], dead_target_indices=[], complete_assoc_probability=a_matrix.prior_prob,\
-            bottom_prob=1.0, conditional_unassociated_probability=1.0, a_matrix=a_matrix)
-        MATRIX_PERMANENT_UBS.tighten_upper_bound(matrix_idx, required_cells=(), slack=1.0, assert_zero=True)
-        return sampled_a_info
-
-    N = a_matrix.matrix.shape[0]
-    assert(N == a_matrix.matrix.shape[1])
+    if clear_caches_new_matrix:
+        matrix_permanent_UBs = {}
+        BEST_ROW_CACHE = {} 
+    N = matrix.shape[0]
+    assert(N == matrix.shape[1])
+    global ORIGINAL_MATRIX
+    ORIGINAL_MATRIX = matrix
     #convert 2d array to tuple of tuples
-    hashable_matrix = tuple([tuple(row) for row in a_matrix.matrix])
+    hashable_matrix = tuple([tuple(row) for row in matrix])
     no_required_cells = ()
-
-    global_row_indices = range(N)
-    global_col_indices = range(N)
-    if verbose:
-        print "permanent UB from sample_association_single_matrix:", MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, no_required_cells)
-    assert(MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, no_required_cells) > 0)
-    if DEBUG_3:
-        print '2 calling sample_association_01matrix_plusSlack with prv_required_cells:', []
-
-    sampled_association, sub_tree_slack = sample_association_01matrix_plusSlack(a_matrix.matrix, matrix_idx, MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, no_required_cells), \
-        prv_required_cells=[], depth=1, \
-        global_row_indices=global_row_indices, global_col_indices=global_col_indices, with_replacement=with_replacement,\
-        tighten_slack=tighten_slack)
-
-    if sampled_association is None: #we sampled a weight 0 association from proposal
-        return None
+    complete_matrix_permanent_UB = (minc_extended_UB2(matrix)) #add a little for potential computational error, would be nice to make this cleaner
+    matrix_permanent_UBs[no_required_cells] = complete_matrix_permanent_UB
 
 
-    meas_grp_associations = [-1 for i in range(N)]
-    complete_assoc_probability = 1.0
-    for (m_idx, t_idx) in sampled_association:
-        meas_grp_associations[m_idx] = t_idx
-        complete_assoc_probability *= a_matrix.matrix[m_idx, t_idx]
-    assert(meas_grp_associations.count(-1) == 0)
+    gumbel_truncation = np.inf
 
-    complete_assoc_probability *= a_matrix.prior_prob
+    sampled_association = None
+    first_sample = True
+    while(True):
+        #sample a gumbel that is the max of log(floor(matrix_permanent_UBs[no_required_cells])) gumbels
+        cur_sampled_gumbel = compare_truncated_gumbel(n_vals=[matrix_permanent_UBs[no_required_cells]], truncation=gumbel_truncation)[0]
+        global_row_indices = range(N)
+        global_col_indices = range(N)
+        sampled_association, sub_tree_slack = sample_association_01matrix_plusSlack(matrix, matrix_permanent_UBs[no_required_cells], \
+            matrix_permanent_UBs, prv_required_cells=[], depth=1, \
+            global_row_indices=global_row_indices, global_col_indices=global_col_indices, first_sample=first_sample)
 
-    sampled_a_info = associationInfo(meas_grp_associations, dead_target_indices=[], complete_assoc_probability=complete_assoc_probability, bottom_prob=-99, conditional_unassociated_probability=-99, a_matrix=a_matrix,
-                                     unassociated_target_count=-99, unassociated_measurement_count=-99, \
-                                     min_possible_conditional_unassociated_probability=-99, \
-                                     unassociated_measurements=[],\
-                                     unassociated_targets=[])
-    return sampled_a_info
+        if sampled_association is None: #we sampled a weight 0 association from proposal
+            
+            # print "subtracting sub_tree_slack", sub_tree_slack, "from no_required_cells:", no_required_cells
 
+            # check_bounds_add_up(matrix, no_required_cells, global_row_indices, global_col_indices)      
+
+            gumbel_truncation = cur_sampled_gumbel
+            # print "matrix_permanent_UBs before 99", matrix_permanent_UBs
+            # print "matrix_permanent_UBs before 99", matrix_permanent_UBs
+            # print "matrix_permanent_UBs[no_required_cells]:", matrix_permanent_UBs[no_required_cells]
+
+        else: #we sampled a weight 1 association and are done
+            break
+        first_sample = False
+
+    sample_of_logZ = cur_sampled_gumbel - np.euler_gamma#weight is 1, so ln(weight) = ln(1) = 0
+    # sampled_association = correct_sampled_association_indices(sampled_association)
+    cur_permanentUB = matrix_permanent_UBs[no_required_cells]
+
+    print_sampled_association_weight = True
+    if print_sampled_association_weight:
+        sampled_association_weight = 1.0
+        for row, col in sampled_association:
+            sampled_association_weight *= matrix[row, col]
+        print "sampled_association_weight:", sampled_association_weight
+    return (sampled_association, sample_of_logZ, cur_permanentUB)
 
 def correct_sampled_association_indices(incorrect_sampled_association):
     used_cols = defaultdict(int)
@@ -847,37 +160,83 @@ def correct_sampled_association_indices(incorrect_sampled_association):
     print        
     return correct_sampled_association
 
-def sinkhorn_scale(matrix, debug=False, max_iters=np.inf, do_cols = True, do_rows=True):
+def check_bounds_add_up_simple(original_matrix, prv_required_cells):
+    return
+    total_UB = matrix_permanent_UBs[tuple(prv_required_cells)]
+    sum_of_sub_UBs = 0.0
+    for cur_req_cells, sub_matrix_UB in matrix_permanent_UBs.items():
+        if len(cur_req_cells) == len(prv_required_cells) + 1 and\
+          cur_req_cells == prv_required_cells[:len(cur_req_cells)]:
+            sum_of_sub_UBs += sub_matrix_UB*original_matrix[cur_req_cells[-1]]
+            print "sub_matrix_UB*original_matrix[cur_req_cells[-1]]:", sub_matrix_UB*original_matrix[cur_req_cells[-1]]
+    if sum_of_sub_UBs <= total_UB + .000001:
+        pass
+        # print "Correct!", sum_of_sub_UBs, "<", total_UB
+    else:
+        pass
+        # print "incorrect!", sum_of_sub_UBs, ">", total_UB
+
+    assert (sum_of_sub_UBs <= total_UB + .000001), (sum_of_sub_UBs - total_UB, sum_of_sub_UBs, total_UB, prv_required_cells)
+
+
+def check_bounds_add_up(matrix, prv_required_cells, global_row_indices, global_col_indices):
+    print "check_bounds_add_up called on:"
+    print "matrix:", matrix
+    print "prv_required_cells:", prv_required_cells
+    global_best_row_to_partition = find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample=False, verbose=False)
+    #get local index
+    best_row_to_partition = global_best_row_to_partition
+    # best_row_to_partition = list(global_row_indices).index(global_best_row_to_partition)
+    print "global_row_indices[best_row_to_partition]:", global_row_indices[best_row_to_partition]
+    print "matrix_permanent_UBs:", matrix_permanent_UBs
+    matrix_UB = matrix_permanent_UBs[tuple(prv_required_cells)]
+    proposal_distribution = []
+    N = matrix.shape[0]
+    assert(N == matrix.shape[1])
+    fixed_column_options = list(itertools.permutations(range(N), 1))
+    for fixed_columns in (fixed_column_options):
+        cur_submatrix = np.delete(matrix, fixed_columns, 1) #delete columns
+        cur_submatrix = np.delete(cur_submatrix, [best_row_to_partition], 0) #delete rows
+
+        print "global_row_indices:", global_row_indices
+        print "best_row_to_partition:", best_row_to_partition
+        print "global_col_indices:", global_col_indices
+        print "fixed_columns:", fixed_columns
+        print "best_row_to_partition:", best_row_to_partition
+        print "N:", N
+        required_cells = tuple(prv_required_cells + [(global_row_indices[best_row_to_partition], global_col_indices[fixed_columns[0]])])
+        submatrix_permanent_UB = matrix_permanent_UBs[tuple(required_cells)]
+        # submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
+
+        upper_bound_submatrix_count = submatrix_permanent_UB
+        upper_bound_submatrix_count *= matrix[best_row_to_partition, fixed_columns[0]]
+
+        proposal_distribution.append(upper_bound_submatrix_count)
+    cur_partitioned_UB = np.sum(proposal_distribution)
+    assert(np.abs(cur_partitioned_UB - matrix_UB) < .001), (cur_partitioned_UB, matrix_UB)
+
+def sinkhorn_scale(matrix, debug=False):
     assert(matrix.shape[0] == matrix.shape[1])
     N = matrix.shape[0]
     cols_scaling = np.ones(N)
     rows_scaling = np.ones(N)
     original_matrix = copy.copy(matrix)
     iters = 0
-    while(iters < max_iters):  
-        iters += 1     
-        if do_cols:         
-            col_sums = np.sum(matrix, axis=0)
-            col_normalized_matrix = matrix / col_sums
-            cols_scaling /= col_sums
-            # print "col_sums:", col_sums
-            # print "col_normalized_matrix:", col_normalized_matrix
-            # print "cols_scaling:", cols_scaling
-        else:
-            col_normalized_matrix = matrix
+    while(True):            
+        col_sums = np.sum(matrix, axis=0)
+        col_normalized_matrix = matrix / col_sums
 
-        if do_rows:
-            row_sums = np.sum(col_normalized_matrix, axis=1)
-            double_stochastic_matrix = col_normalized_matrix/row_sums[:,None]
-            rows_scaling /= row_sums
-        else:
-            double_stochastic_matrix = col_normalized_matrix
+        row_sums = np.sum(col_normalized_matrix, axis=1)
+        double_stochastic_matrix = col_normalized_matrix/row_sums[:,None]
+
+        cols_scaling /= col_sums
+        rows_scaling /= row_sums
+
         if np.allclose(matrix, double_stochastic_matrix):
             break
         else:
             matrix = double_stochastic_matrix
 
-    print "sinkhorn_scale iters:", iters
     if debug:
         iters += 1
         print "iters:", iters
@@ -887,28 +246,41 @@ def sinkhorn_scale(matrix, debug=False, max_iters=np.inf, do_cols = True, do_row
 
     return double_stochastic_matrix, cols_scaling, rows_scaling
 
-def conjectured_optimal_bound(matrix, return_lower_bound=False):
+
+def sinkhorn_scale_fast(matrix, lam=1):
+    M = -np.log(matrix)/lam
     assert(matrix.shape[0] == matrix.shape[1])
     N = matrix.shape[0]
-    # print '-'*80
-    # print "matrix:", matrix
+    a = np.ones(N)
+    b = np.ones(N)
+    results = ot.sinkhorn(a,b,M,1,method='sinkhorn',numItermax=10000000000,log=True)
+    print("results:", results)
+    double_stochastic_matrix = results[0]
+    cols_scaling = results[1]['v']
+    rows_scaling = results[1]['u']
+    check_scaled_matrix = cols_scaling*np.expand_dims(rows_scaling, axis=1)*matrix
+    print("check_scaled_matrix:", check_scaled_matrix)
+    print(np.sum(check_scaled_matrix, axis=0))
+    print(np.sum(check_scaled_matrix, axis=1))
+    # print("cols_scaling:", cols_scaling)
+    # print("rows_scaling:", rows_scaling)
+    # print("double_stochastic_matrix:", double_stochastic_matrix)
+
+    return cols_scaling, rows_scaling, double_stochastic_matrix
+
+    
+
+def conjectured_optimal_bound(matrix):
+    assert(matrix.shape[0] == matrix.shape[1])
+    N = matrix.shape[0]
+
     double_stochastic_matrix, cols_scaling, rows_scaling = sinkhorn_scale(matrix)
-    # print "double_stochastic_matrix:", double_stochastic_matrix
+
     one_minus_matrix = 1 - double_stochastic_matrix
-    # print "one_minus_matrix:", one_minus_matrix
-    permanent_LB = np.prod(np.power(one_minus_matrix, one_minus_matrix)) / (np.prod(cols_scaling)*np.prod(rows_scaling))
-    # print "permanent_LB:", permanent_LB
-    permanent_UB = 2**(N/2) * permanent_LB
+    permanent_UB = 2**(N/2) * np.prod(np.power(one_minus_matrix, one_minus_matrix)) / (np.prod(cols_scaling)*np.prod(rows_scaling))
     # permanent_UB = 2**(N) * np.prod(np.power(one_minus_matrix, one_minus_matrix)) / (np.prod(cols_scaling)*np.prod(rows_scaling))
-    # print "permanent_UB:", permanent_UB
-    if return_lower_bound:
-        if N == 1:
-            return matrix[0,0], matrix[0,0]
-        return permanent_LB, permanent_UB
-    else:
-        if N == 1:
-            return matrix[0,0]
-        return permanent_UB
+
+    return permanent_UB
 
 # @profile
 def minc_extended_UB2_excludeRowCol(matrix, excluded_row, excluded_col):
@@ -1015,26 +387,26 @@ def find_best_row_to_partition_matrix_faster(matrix, prv_required_cells, first_s
     return row_with_smallest_partitioned_UB
 
 # @profile
-def find_best_row_to_partition_matrix(matrix, matrix_idx, prv_required_cells, first_sample, verbose=False):
+def find_best_row_to_partition_matrix(matrix, prv_required_cells, first_sample, verbose=False):
     if COMPARE_WAI:
         return 0
     global BEST_ROW_CACHE
     # print "BEST_ROW_CACHE:"
     # print BEST_ROW_CACHE
     
-    # if first_sample and len(prv_required_cells) == 0:
-    #     pass
-    #     # BEST_ROW_CACHE = {} #clear the cache, new matrix
-    #     # print "cache cleared!!"
-    # else:
-    #     assert(len(BEST_ROW_CACHE)>0), (first_sample, len(prv_required_cells), BEST_ROW_CACHE) #the cache should contain something
+    if first_sample and len(prv_required_cells) == 0:
+        pass
+        # BEST_ROW_CACHE = {} #clear the cache, new matrix
+        # print "cache cleared!!"
+    else:
+        assert(len(BEST_ROW_CACHE)>0), (first_sample, len(prv_required_cells), BEST_ROW_CACHE) #the cache should contain something
 
     if tuple(prv_required_cells) in BEST_ROW_CACHE:
         if verbose:
             print "returning cached result"
-        # print "smallest_partitioned_upper_bound =", BEST_ROW_CACHE[(matrix_idx, tuple(prv_required_cells))]
+        # print "smallest_partitioned_upper_bound =", BEST_ROW_CACHE[tuple(prv_required_cells)]
 
-        return BEST_ROW_CACHE[(matrix_idx, tuple(prv_required_cells))]
+        return BEST_ROW_CACHE[tuple(prv_required_cells)]
 
     N = matrix.shape[0]
     assert(N == matrix.shape[1])
@@ -1068,7 +440,7 @@ def find_best_row_to_partition_matrix(matrix, matrix_idx, prv_required_cells, fi
         print "smallest_partitioned_upper_bound =", smallest_partitioned_upper_bound, "matrix_UB =", matrix_UB
     assert(smallest_partitioned_upper_bound < matrix_UB or np.allclose(smallest_partitioned_upper_bound, matrix_UB)), (smallest_partitioned_upper_bound, matrix_UB, matrix.shape, matrix)
 
-    BEST_ROW_CACHE[(matrix_idx, tuple(prv_required_cells))] = row_with_smallest_partitioned_UB
+    BEST_ROW_CACHE[tuple(prv_required_cells)] = row_with_smallest_partitioned_UB
     # print "BEST_ROW_CACHE:"
     # print BEST_ROW_CACHE
 
@@ -1141,8 +513,9 @@ def find_best_row_to_partition_matrix_not_vectorized(matrix, prv_required_cells,
 
     return row_with_smallest_partitioned_UB
 
-def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_required_cells, depth, \
-    global_row_indices, global_col_indices, first_sample=False, with_replacement=False, tighten_slack=True):
+
+def sample_association_01matrix_plusSlack(matrix, permanentUB, matrix_permanent_UBs, prv_required_cells, depth, \
+    global_row_indices, global_col_indices, first_sample=False):
     '''
     Inputs: 
         - matrix: (np.array of shap NxN)
@@ -1151,8 +524,8 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
     Outputs: list of length N of tuples representing (row, col) associations
     '''
     # print "depth =", depth
-    global MATRIX_PERMANENT_UBS
-
+    if DEBUG1:
+        print "matrix_permanent_UBs:", matrix_permanent_UBs
     local_matrix = np.copy(matrix)
     N = local_matrix.shape[0]
     assert(N == local_matrix.shape[1])
@@ -1160,7 +533,7 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
     fixed_column_options = list(itertools.permutations(range(N), depth))
     
     prv_required_cells_copy = copy.copy(prv_required_cells)
-    best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, matrix_idx, prv_required_cells_copy, first_sample)
+    best_row_to_partition = find_best_row_to_partition_matrix(local_matrix, prv_required_cells_copy, first_sample)
     # best_row_to_partition = find_best_row_to_partition_matrix_faster(local_matrix, prv_required_cells_copy, first_sample, permanentUB)
 
     #swap rows
@@ -1183,30 +556,32 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
     proposal_distribution = []
     if DEBUG1:
         print "submatrix upper bounds:"
-    # print '!'*10
     for fixed_columns in (fixed_column_options):
         cur_submatrix = np.delete(local_matrix, fixed_columns, 1) #delete columns
         cur_submatrix = np.delete(cur_submatrix, range(depth), 0) #delete rows
 
         hashable_matrix = tuple([tuple(row) for row in cur_submatrix])
         required_cells = tuple(prv_required_cells_copy + [(global_row_indices[row], global_col_indices[fixed_columns[row]]) for row in range(depth)])
-        submatrix_permanent_UB = MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, required_cells, cur_submatrix)
+        if required_cells in matrix_permanent_UBs:
+            submatrix_permanent_UB = matrix_permanent_UBs[required_cells]
+        else:
+            submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
+            assert(submatrix_permanent_UB > -.000000001)
+            if submatrix_permanent_UB < 0:
+                submatrix_permanent_UB = 0
+           
+            matrix_permanent_UBs[required_cells] = submatrix_permanent_UB
         
-        # print "cur_submatrix:", cur_submatrix
-        # print "submatrix_permanent_UB:", submatrix_permanent_UB
+        
+
+        # print submatrix_permanent_UB
         upper_bound_submatrix_count = submatrix_permanent_UB
         for row in range(depth):
             upper_bound_submatrix_count *= local_matrix[row, fixed_columns[row]]
-        # print "submatrix_permanent_UB * matrix element:", upper_bound_submatrix_count
-        # print 
-
         assert(submatrix_permanent_UB >= 0), submatrix_permanent_UB
-        # print "upper_bound_submatrix_count =", upper_bound_submatrix_count, "for fixed_columns =", fixed_columns
         proposal_distribution.append(upper_bound_submatrix_count)
         if DEBUG1:
             print upper_bound_submatrix_count,
-    # print "proposal_distribution:", proposal_distribution
-
     if DEBUG1:
         print
 
@@ -1222,7 +597,7 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
     if sum_of_submatrix_UBs <= permanentUB or np.allclose(sum_of_submatrix_UBs, permanentUB):
         # print "sum_of_submatrix_UBs <= permanentUB :):):)"
         cur_level_slack = permanentUB - sum_of_submatrix_UBs
-        # check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells_copy)
+        check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells_copy)
         if cur_level_slack < 0.0:
             cur_level_slack = 0.0
         if DEBUG1:
@@ -1237,44 +612,29 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
         sampled_association_idx = np.random.choice(len(proposal_distribution), p=proposal_distribution)
         # print "proposal distribution:", proposal_distribution
 
-
-        if sampled_association_idx == len(proposal_distribution) - 1: #sampled slack
+        if sampled_association_idx == len(proposal_distribution) - 1:
             # print "we sampled the junk bin"
             sampled_association = None #we sampled a weight 0 association
 
-            # check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
-            if CUR_DEBUG:
-                print '1 tighten_upper_bound, slack =', cur_level_slack
-            # MATRIX_PERMANENT_UBS.tighten_upper_bound(matrix_idx, tuple(prv_required_cells), cur_level_slack) #+ sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]#sub_tree_slack            
-            # rather than subtracting the slack from the upper bound (above line), directly set to the sum of submatrix upper bounds
-            # this avoids numerical issues when the slack is much larger than the sum of the submatrix upper bounds
-            if tighten_slack:
-                # print '1 tighten_upper_bound, slack =', cur_level_slack
-                MATRIX_PERMANENT_UBS.set_upper_bound(matrix_idx, tuple(prv_required_cells), new_upper_bound=sum_of_submatrix_UBs)
-                # print "set UB for", prv_required_cells, "to", sum_of_submatrix_UBs
-                
-                ####### BEGIN DEBUG ########
-                # exact_permanent_local = calc_permanent_rysers(local_matrix)
-                # if sum_of_submatrix_UBs > exact_permanent_local:
-                #     # N = local_matrix.shape[0]
-                #     # fixed_column_options = list(itertools.permutations(range(N), depth))
-                #     for fixed_columns in (fixed_column_options):
-                #         cur_submatrix = np.delete(local_matrix, fixed_columns, 1) #delete columns
-                #         cur_submatrix = np.delete(cur_submatrix, range(depth), 0) #delete rows
+            # hashable_matrix = tuple([tuple(row) for row in local_matrix])
+            # required_cells = tuple(prv_required_cells_copy)
 
-                #         hashable_matrix = tuple([tuple(row) for row in cur_submatrix])
-                #         required_cells = tuple(prv_required_cells_copy + [(global_row_indices[row], global_col_indices[fixed_columns[row]]) for row in range(depth)])
-                #         submatrix_permanent_UB = MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, required_cells, cur_submatrix)
-                #         assert(calc_permanent_rysers(cur_submatrix) <= submatrix_permanent_UB)                     
-                # assert(exact_permanent_local <= sum_of_submatrix_UBs), (exact_permanent_local, sum_of_submatrix_UBs)
-                ####### END DEBUG ########
-
-            # check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
+            # print "calling 179 with required_cells:", required_cells
+            # print "matrix_permanent_UBs before 179", matrix_permanent_UBs
+            # matrix_permanent_UBs[required_cells] -= 1
+            # print "matrix_permanent_UBs after 179", matrix_permanent_UBs
+            # print
+            check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
+            matrix_permanent_UBs[tuple(prv_required_cells)] -= cur_level_slack #+ sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]#sub_tree_slack            
+            assert(matrix_permanent_UBs[tuple(prv_required_cells)] > -.000000001)
+            if matrix_permanent_UBs[tuple(prv_required_cells)] < 0:
+                matrix_permanent_UBs[tuple(prv_required_cells)] = 0
+            
+            check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
             
             return sampled_association, cur_level_slack
         else:
             sampled_fixed_columns = fixed_column_options[sampled_association_idx]
-            sampled_matrix_element = local_matrix[0,sampled_fixed_columns[0]]
             sampled_submatrix = np.delete(local_matrix, sampled_fixed_columns, 1) #delete columns
             sampled_submatrix = np.delete(sampled_submatrix, range(depth), 0) #delete rows
             sampled_association = [(row, sampled_fixed_columns[row]) for row in range(depth)]
@@ -1282,100 +642,89 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
            
             hashable_matrix = tuple([tuple(row) for row in sampled_submatrix])
             required_cells = tuple(prv_required_cells_copy + sampled_association_global_indices)
-            sampled_submatrix_permanent_UB = MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, required_cells)
+            sampled_submatrix_permanent_UB = matrix_permanent_UBs[required_cells]
 
             # print "sampled_submatrix:", sampled_submatrix
             if sampled_submatrix.shape[0] == 0:
-                if CUR_DEBUG:
-                    print '2 tighten_upper_bound, slack =', cur_level_slack
-                if with_replacement: #allow this element to be sampled again
-                    slack_from_sample = 0.0
-                else: #do not allow this element to be sampled again
-                    slack_from_sample = sampled_matrix_element
-                # print 'tighten 2'
-                MATRIX_PERMANENT_UBS.tighten_upper_bound(matrix_idx, tuple(prv_required_cells), slack_from_sample)
-                return sampled_association_global_indices, slack_from_sample
-                # MATRIX_PERMANENT_UBS.tighten_upper_bound(matrix_idx, tuple(prv_required_cells), cur_level_slack)
-                # return sampled_association_global_indices, cur_level_slack
+                matrix_permanent_UBs[tuple(prv_required_cells)] -= cur_level_slack
+                assert(matrix_permanent_UBs[tuple(prv_required_cells)] > -.000000001)
+                if matrix_permanent_UBs[tuple(prv_required_cells)] < 0:
+                    matrix_permanent_UBs[tuple(prv_required_cells)] = 0
 
-
+                return sampled_association_global_indices, cur_level_slack
             prv_required_cells_copy.extend(sampled_association_global_indices)
             global_row_indices = np.delete(global_row_indices, range(depth))
             global_col_indices = np.delete(global_col_indices, sampled_fixed_columns)
             if DEBUG1:
                 print "required_cells before calling sample_association_01matrix_plusSlack:", required_cells
-            remaining_sampled_associations, sub_tree_slack = sample_association_01matrix_plusSlack(sampled_submatrix, \
-                matrix_idx, sampled_submatrix_permanent_UB, prv_required_cells_copy, depth=1, global_row_indices=global_row_indices, \
-                global_col_indices=global_col_indices, with_replacement=with_replacement, tighten_slack=tighten_slack)
+            remaining_sampled_associations, sub_tree_slack = sample_association_01matrix_plusSlack(sampled_submatrix, sampled_submatrix_permanent_UB, matrix_permanent_UBs, prv_required_cells_copy, depth=1, global_row_indices=global_row_indices, global_col_indices=global_col_indices)
             if DEBUG1:
                 print "required_cells after calling sample_association_01matrix_plusSlack:", required_cells
                 print "subtracting sub_tree_slack", sub_tree_slack, "from required_cells:", required_cells
 
+            #begin debug
+            if DEBUG1:
+                if DEBUG1:
+                    print '-'*80
+                    print "before subtracting slack from ", required_cells
+                    print matrix_permanent_UBs
+                    print "submatrix upper bounds"
+                partitioned_ubs = []
+                for cur_col in range(len(global_col_indices)):
+                    cur_required_cells = tuple(list(required_cells) + [(global_row_indices[0], global_col_indices[cur_col])])
+                    submatrix_permanent_UB = matrix_permanent_UBs[cur_required_cells]
+                    # submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
+
+                    upper_bound_submatrix_count = submatrix_permanent_UB
+                    upper_bound_submatrix_count *= local_matrix[0, cur_col]
+
+                    partitioned_ubs.append(upper_bound_submatrix_count)
+                    if DEBUG1:  
+                        print upper_bound_submatrix_count,
+                if DEBUG1:
+                    print
+                    print "np.sum(partitioned_ubs) =", np.sum(partitioned_ubs)
+                    print "non partitioned UB =", matrix_permanent_UBs[required_cells]
+
+            #end debug
+
             # print "associated with valid subtree, subtracting cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]] =",  cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]
             # print "prv_required_cells:", prv_required_cells
-            # check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
-            if CUR_DEBUG:
-                print '3 tighten_upper_bound, slack =', cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]
-                print 'cur_level_slack:', cur_level_slack
-                print 'sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]', sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]
-                print 'sub_tree_slack', sub_tree_slack
-                print 'local_matrix[0, sampled_fixed_columns[0]]', local_matrix[0, sampled_fixed_columns[0]]
+            check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
+            matrix_permanent_UBs[tuple(prv_required_cells)] -= cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]#sub_tree_slack
+            assert(matrix_permanent_UBs[tuple(prv_required_cells)] > -.000000001)
+            if matrix_permanent_UBs[tuple(prv_required_cells)] < 0:
+                matrix_permanent_UBs[tuple(prv_required_cells)] = 0
+            check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
 
-            SAMPLE_WITH_REPLACEMENT_ONLY_TIGHTEN_CUR_LEVEL_SLACK = True
-            # if permanentUB - (cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]) <= 0:
-            # print "tighten_slack:", tighten_slack
-            if tighten_slack:
-                if SAMPLE_WITH_REPLACEMENT_ONLY_TIGHTEN_CUR_LEVEL_SLACK:
-                    # assert(sum_of_submatrix_UBs - sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]] >= 0)
-                    # MATRIX_PERMANENT_UBS.set_upper_bound(matrix_idx, tuple(prv_required_cells), new_upper_bound=sum_of_submatrix_UBs - sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]])
-                    # print '3 tighten_upper_bound, cur_level_slack:', cur_level_slack
-                    MATRIX_PERMANENT_UBS.set_upper_bound(matrix_idx, tuple(prv_required_cells), new_upper_bound=sum_of_submatrix_UBs)
-                    
-                    ####### BEGIN DEBUG ########
-                    # print "set UB for", prv_required_cells, "to", sum_of_submatrix_UBs
-                    # exact_permanent_local = calc_permanent_rysers(local_matrix)
-                    # if sum_of_submatrix_UBs > exact_permanent_local:
-                    #     N_debug = cur_submatrix.shape[0]
-                    #     fixed_column_options_debug = list(itertools.permutations(range(N_debug), depth))
-                    #     for fixed_columns in (fixed_column_options_debug):
+            #begin debug
+            if DEBUG1:
+                partitioned_ubs = []
 
-                    #         best_row_to_partition = find_best_row_to_partition_matrix(sampled_submatrix, matrix_idx, prv_required_cells_copy, first_sample)
-                    #         sampled_submatrix[[0,best_row_to_partition]] = sampled_submatrix[[best_row_to_partition,0]]
+                for cur_col in range(len(global_col_indices)):
+                    cur_required_cells = tuple(list(required_cells) + [(global_row_indices[0], global_col_indices[cur_col])])
+                    submatrix_permanent_UB = matrix_permanent_UBs[cur_required_cells]
+                    # submatrix_permanent_UB = (minc_extended_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
 
+                    upper_bound_submatrix_count = submatrix_permanent_UB
+                    upper_bound_submatrix_count *= local_matrix[0, cur_col]
 
+                    partitioned_ubs.append(upper_bound_submatrix_count)
 
-                    #         cur_submatrix = np.delete(sampled_submatrix, fixed_columns, 1) #delete columns
-                    #         cur_submatrix = np.delete(cur_submatrix, range(depth), 0) #delete rows
-
-                    #         hashable_matrix = tuple([tuple(row) for row in cur_submatrix])
-                    #         print "global_row_indices:", global_row_indices
-                    #         print "global_col_indices:", global_col_indices
-                    #         print "fixed_columns:", fixed_columns
-                    #         print "depth:", depth
-                    #         required_cells_debug = tuple(prv_required_cells_copy + [(global_row_indices[row], global_col_indices[fixed_columns[row]]) for row in range(depth)])
-                    #         submatrix_permanent_UB = MATRIX_PERMANENT_UBS.get_upper_bound(matrix_idx, required_cells_debug, cur_submatrix)
-                    #         assert(calc_permanent_rysers(cur_submatrix) <= submatrix_permanent_UB), (calc_permanent_rysers(cur_submatrix), submatrix_permanent_UB, required_cells_debug, cur_submatrix)                 
-                    # assert(exact_permanent_local <= sum_of_submatrix_UBs), (exact_permanent_local, sum_of_submatrix_UBs)
-                    ####### END DEBUG ########
-
-                else:
-                    # print 'tighten 3'
-                    MATRIX_PERMANENT_UBS.tighten_upper_bound(matrix_idx, tuple(prv_required_cells), cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]])            
-            # check_bounds_add_up_simple(ORIGINAL_MATRIX, prv_required_cells)
-
-
+            #end debug
             # check_bounds_add_up(sampled_submatrix, prv_required_cells_copy, global_row_indices, global_col_indices)      
             if remaining_sampled_associations is None: #we sampled some slack
-                sampled_association_global_indices = None           
+                sampled_association_global_indices = None
+                # print "calling 203 with required_cells:", required_cells            
+                # print "matrix_permanent_UBs before 203", matrix_permanent_UBs
+                # print "matrix_permanent_UBs after 203", matrix_permanent_UBs
+                # print             
                 return sampled_association_global_indices, cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]
             else:
                 sampled_association_global_indices.extend(remaining_sampled_associations)
                 return sampled_association_global_indices, cur_level_slack + sub_tree_slack*local_matrix[0, sampled_fixed_columns[0]]
     else:
         print "sum_of_submatrix_UBs > permanentUB :(:(:("
-        print "matrix:"
-        print matrix
-        print "proposal_distribution:", proposal_distribution
         print "sum_of_submatrix_UBs-permanentUB: ", sum_of_submatrix_UBs-permanentUB
         print "(sum_of_submatrix_UBs-permanentUB)/permanentUB: ", (sum_of_submatrix_UBs-permanentUB)/permanentUB
         print "np.log(sum_of_submatrix_UBs)-np.log(permanentUB): ", np.log(sum_of_submatrix_UBs)-np.log(permanentUB)
@@ -1386,7 +735,7 @@ def sample_association_01matrix_plusSlack(matrix, matrix_idx, permanentUB, prv_r
         find_best_row_to_partition_matrix(local_matrix, prv_required_cells_copy, first_sample)
         print
 
-        sampled_association_global_indices = sample_association_01matrix_plusSlack(local_matrix, matrix_idx, permanentUB, prv_required_cells_copy, depth=depth+1, global_row_indices=global_row_indices, global_col_indices=global_col_indices)
+        sampled_association_global_indices = sample_association_01matrix_plusSlack(local_matrix, permanentUB, matrix_permanent_UBs, prv_required_cells_copy, depth=depth+1, global_row_indices=global_row_indices, global_col_indices=global_col_indices)
         return sampled_association_global_indices
     # return sampled_association_global_indices
 
@@ -1473,37 +822,7 @@ def numba_delta(k, numba_delta_cache=NUMBA_DELTA_CACHE):
 
     return numba_delta_cache[k-1]
 
-
-def fast_glynn_perm(M):
-    row_comb = [sum(c) for c in zip(*M)]
-    n=len(M)
-
-    total = 0
-    old_grey = 0 
-    sign = +1
-
-    binary_power_dict = {2**i:i for i in range(n)}
-    num_loops = 2**(n-1)
-
-    for bin_index in xrange(1, num_loops + 1):  
-        total += sign * reduce(mul, row_comb)
-
-        new_grey = bin_index^(bin_index/2)
-        grey_diff = old_grey ^ new_grey
-        grey_diff_index = binary_power_dict[grey_diff]
-
-        new_vector = M[grey_diff_index]
-        direction = 2 * cmp(old_grey,new_grey)      
-
-        for i in range(n):
-            row_comb[i] += new_vector[i] * direction
-
-        sign = -sign
-        old_grey = new_grey
-
-    return total/num_loops
-
-def minc_extended_UB2(matrix, require_square_matrix=True, debug=False):
+def minc_extended_UB2(matrix, require_square_matrix=False):
     if COMPARE_WAI:
         return immediate_nesting_extended_bregman(matrix)
     if require_square_matrix: #testing generalization to non-square matrices
@@ -1511,13 +830,6 @@ def minc_extended_UB2(matrix, require_square_matrix=True, debug=False):
     N = matrix.shape[1]
     deltas = np.array([delta(i + 1) for i in range(N)])
     matrix_sorted = np.sort(matrix, axis=1)[:, ::-1]
-
-    if debug:
-        exact_permanent = permanent_check(matrix)#calc_permanent_rysers(matrix)
-        permeanent_UB = (matrix_sorted * deltas).sum(axis=1).prod()
-        permeanent_UB1 = np.exp(np.sum(np.log((matrix_sorted * deltas).sum(axis=1))))
-        assert(permeanent_UB >= exact_permanent), (permeanent_UB, permeanent_UB1, exact_permanent, permanent_check(matrix), npperm(matrix), matrix)
-
     return (matrix_sorted * deltas).sum(axis=1).prod()
 
 # @profile
@@ -2994,6 +2306,7 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
                       plot_filename=None):
     n_vals_mean1 = []
     log_n_vals_mean1 = []
+    log_run_time_vals_mean1 = []
     run_time_vals_mean1 = []
     number_of_times_partition_called_vals_mean = []
     all_n_vals1 = []
@@ -3012,17 +2325,25 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
             # all_number_of_times_partition_called_vals.extend(number_of_times_partition_called_list)
             log_n_vals_mean1.append(math.log(n))
             n_vals_mean1.append(n)
-            run_time_vals_mean1.append(math.log(np.mean(runtimes_list)))
-            # run_time_vals_mean1.append(np.mean(runtimes_list))
+            log_run_time_vals_mean1.append(math.log(np.mean(runtimes_list)))
+            run_time_vals_mean1.append(np.mean(runtimes_list))
             # number_of_times_partition_called_vals_mean.append(math.log(np.mean(number_of_times_partition_called_list)))
             # number_of_times_partition_called_vals_mean.append(np.mean(number_of_times_partition_called_list))
     fig = plt.figure()
     ax = plt.subplot(111)
-    ax.plot(n_vals_mean1, run_time_vals_mean1, 'r+', label='ours' , markersize=10)
+    ax.plot(n_vals_mean1, log_run_time_vals_mean1, 'r+', label='ours' , markersize=10)
     # ax.plot(all_n_vals1, all_run_time_vals1, 'r+', label='run_time_vals_mean' , markersize=10)
+    POLY_FIT = True #fit with some polynomials
+    if POLY_FIT:
+        xp = np.linspace(10, 200, 200)
+        p5 = np.exp(-20)*xp**5
+        p4 = np.exp(-15)*xp**4
+        ax.plot(xp, np.log(p4), '-')
+        ax.plot(xp, np.log(p5), '--')
 
     if pickle_file_paths2 is not None:
         n_vals_mean2 = []
+        log_run_time_vals_mean2 = []
         run_time_vals_mean2 = []
         log_n_vals_mean2 = []
 
@@ -3036,16 +2357,16 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
                     continue
                 n_vals_mean2.append(n)
                 log_n_vals_mean2.append(math.log(n))
-                run_time_vals_mean2.append(math.log(np.mean(runtimes_list)))
-                # run_time_vals_mean2.append(np.mean(runtimes_list))
+                log_run_time_vals_mean2.append(math.log(np.mean(runtimes_list)))
+                run_time_vals_mean2.append(np.mean(runtimes_list))
 
-        ax.plot(n_vals_mean2, run_time_vals_mean2, 'y+', label='baseline' , markersize=10)
+        ax.plot(n_vals_mean2, log_run_time_vals_mean2, 'y+', label='baseline' , markersize=10)
 
     matplotlib.rcParams.update({'font.size': 20})
 
     # ax.plot(n_vals_mean, number_of_times_partition_called_vals_mean, 'gx', label='number_of_times_partition_called_vals_mean' , markersize=10)
     plt.title('Runtime Scaling')
-    plt.xlabel('N (matrix dimension)')
+    plt.xlabel('n (matrix dimension)')
     plt.ylabel('log(runtime) (log(seconds))')
     # Put a legend below current axis
     lgd = ax.legend(loc='lower right',# bbox_to_anchor=(0.5, -.11),
@@ -3058,33 +2379,41 @@ def plot_runtime_vs_N(pickle_file_paths=['./number_of_times_partition_called_for
 
     fig = plt.figure()
     ax = plt.subplot(111)
-    ax.plot(log_n_vals_mean1, run_time_vals_mean1, 'r+', label='runtime' , markersize=10)
+    # ax.loglog(n_vals_mean1, run_time_vals_mean1, 'r+', label='ours' , markersize=10)
+    ax.plot(np.log(n_vals_mean1), np.log(run_time_vals_mean1), 'r+', label='ours' , markersize=10)
     if pickle_file_paths2 is not None:
-        ax.plot(log_n_vals_mean2, run_time_vals_mean2, 'y+', label='baseline' , markersize=10)
+        # ax.loglog(n_vals_mean2, run_time_vals_mean2, 'y+', label='baseline' , markersize=10)
+        ax.plot(np.log(n_vals_mean2), np.log(run_time_vals_mean2), 'y+', label='baseline' , markersize=10)
 
     plt.title('Runtime Scaling')
-    plt.xlabel('log(N) (log(matrix dimension))')
-    plt.ylabel('log(runtime) (log(seconds))')
+    plt.xlabel('n (matrix dimension)')
+    plt.ylabel('Runtime (seconds)')
     # Put a legend below current axis
-    lgd = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -.1),
+    lgd = ax.legend(loc='upper left',prop={'size': 15},# bbox_to_anchor=(0.5, -.1),
               fancybox=False, shadow=False, ncol=2, numpoints = 1)
-    fig.savefig(plot_filename + 'logN', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent_estimation_scaling_plots_logN_diagMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent_estimation_scaling_plots_logN_uniformMatrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent_estimation_scaling_plots_logN_01Matrix', bbox_extra_artists=(lgd,), bbox_inches='tight')    
+
+    POLY_FIT = True #fit with some polynomials
+    if POLY_FIT:
+        xp = np.linspace(10, 100, 200)
+        # p6 = .05*xp**6
+        p5 = np.exp(-20)*xp**5
+        p4 = np.exp(-15)*xp**4
+        p6 = np.exp(-20)*xp**5 + np.exp(-15)*xp**4
+        ax.plot(np.log(xp), np.log(p4), '-')
+        ax.plot(np.log(xp), np.log(p5), '--')
+        ax.plot(np.log(xp), np.log(p6), '--')
+        # ax.plot(xp, np.log(p4(xp)), '--')
+
+
+    fig.savefig(plot_filename + 'logN', bbox_extra_artists=(lgd,), bbox_inches='tight')    
 
     plt.close()
 
     return 
 
-    POLY_FIT = False #fit with some polynomials
-    if POLY_FIT:
-        p3 = np.poly1d(np.polyfit(x=n_vals_mean, y=number_of_times_partition_called_vals_mean, deg=3))
-        p5 = np.poly1d(np.polyfit(x=n_vals_mean, y=number_of_times_partition_called_vals_mean, deg=5))
-        # p2 = np.poly1d(np.polyfit(x=n_vals_mean, y=number_of_times_partition_called_vals_mean, deg=2))
-        p4 = np.poly1d(np.polyfit(x=n_vals_mean, y=number_of_times_partition_called_vals_mean, deg=4))
-        xp = np.linspace(0, 60, 200)
-        _ = plt.plot(xp, p3(xp), '-', xp, p5(xp), '--', xp, p4(xp), '--')
 
     # fig.savefig('permanent sampling scaling old perm UB', bbox_extra_artists=(lgd,), bbox_inches='tight')    
     # fig.savefig('permanent sampling_amortized scaling new perm UB', bbox_extra_artists=(lgd,), bbox_inches='tight')    
@@ -4043,7 +3372,7 @@ def plot_pruning_effect(pickle_file_paths=['./number_of_times_partition_called_f
 
  
 def find_max_assignment(matrix):
-    assert((matrix >= 0).all()), matrix
+    assert((matrix >= 0).all())
     cost_matrix = -np.log(matrix)
 
     lin_assign = linear_assignment.LinearAssignment(cost_matrix)
@@ -4052,16 +3381,10 @@ def find_max_assignment(matrix):
 
     minimum_cost = 0
     for (row,col) in association_list:
-        if row >= cost_matrix.shape[0] or col >= cost_matrix.shape[1]:
-            print '-'*40, 'find_max_assignment() called', '-'*40
-            print "matrix:"
-            print matrix
-            print "association_list:", association_list            
         minimum_cost += np.asscalar(cost_matrix[row][col])
     max_assignment = np.exp(-minimum_cost)
-    # print "association_list:", association_list
-    # print "max_assignment:", max_assignment
-    return (association_list, max_assignment)
+    print "association_list:", association_list
+    print "max_assignment:", max_assignment
 
 def test_nesting(N, verbose=True):
     use_diag_matrix = False
@@ -4080,7 +3403,7 @@ def test_nesting(N, verbose=True):
                     # matrix[row][col] = 1
 
     fixed_column_options = list(itertools.permutations(range(N), 1))
-    matrix_UB = (optimized_minc_extened_UB2(matrix))
+    matrix_UB = (conjectured_optimal_bound(matrix))
     if verbose:
         print "find_best_row_to_partition_matrix", '*'*80
         print "matrix_UB:", matrix_UB
@@ -4092,7 +3415,7 @@ def test_nesting(N, verbose=True):
             cur_submatrix = np.delete(matrix, fixed_columns, 1) #delete columns
             cur_submatrix = np.delete(cur_submatrix, [row], 0) #delete rows
 
-            submatrix_permanent_UB = (optimized_minc_extened_UB2(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
+            submatrix_permanent_UB = (conjectured_optimal_bound(cur_submatrix)) #add a little for potential computational error, would be nice to make this cleaner
             # print row, fixed_columns, submatrix_permanent_UB
 
             upper_bound_submatrix_count = submatrix_permanent_UB
@@ -4405,73 +3728,98 @@ def rescaled_tracking_UB(matrix, M_remaining, T_remaining):
 
     return permanent_upper_bound
 
-# def get_bp_lower_bound(matrix):
-#     sys.path.insert(0, '/Users/jkuck/research/bp_permanent')
-#     import matlab.engine
-#     eng = matlab.engine.start_matlab()    
-#     assert(matrix.shape[0] == matrix.shape[1])
-#     N = matrix.shape[0]
-#     matlab_matrix = eng.magic(N)
-#     for row in range(N):
-#         for col in range(N):
-#             matlab_matrix[row][col] = matrix[row][col]
-#     bp_lower_bound = eng.estperslow(matlab_matrix)   
-#     return bp_lower_bound 
+    
+# "./networkrepository_data/cage5.mtx"
+# "./networkrepository_data/edge_defined/ENZYMES_g192.edges"
+def sample_permutation(matrix_filename="./networkrepository_data/edge_defined/ENZYMES_g192.edges"):
+    #example for sampling permutations from the distribution defined by the matrix permanent
+    print "matrix_filename:", matrix_filename
+    f = open(matrix_filename, 'rb')
+
+    if matrix_filename.split('.')[-1] == 'mtx':
+        edge_matrix = scipy.io.mmread(f).toarray()#[0:2, 0:5]
+    elif matrix_filename.split('.')[-1] == 'edges':
+        graph = nx.read_edgelist(f)
+        sparse_matrix = nx.adjacency_matrix(graph)
+        edge_matrix = np.asarray(sparse_matrix.todense())
+    else:
+        assert(False), "Error: unexpected format"
+    f.close()
+
+    global COMPARE_WAI
+    COMPARE_WAI = False
+    print "COMPARE_WAI:", COMPARE_WAI
+    test_gumbel_permanent_estimation(N=0, iters=5, num_samples=1, use_matrix=True, matrix=edge_matrix)    
+
+    COMPARE_WAI = True
+    print "COMPARE_WAI:", COMPARE_WAI
+    test_gumbel_permanent_estimation(N=0, iters=5, num_samples=1, use_matrix=True, matrix=edge_matrix)    
 
 
 if __name__ == "__main__":
-######################    test_nesting(N=40)
-######################    sleep(-1)
-######################
-######################
-######################    N=20
-######################    deltas = np.array([delta(i + 1) for i in range(N)])
-######################    print "deltas:", deltas
-######################    print "sum(deltas):", sum(deltas)
-######################    # sleep(-2)
-######################    # matrix = np.exp(EXAMPLE_KITTI_LOG_PROBS)
-######################    # M=8
-######################    # T=8
-######################
-######################    # matrix = np.exp(EXAMPLE_MOT_LOG_PROBS2)
-######################    # M=27
-######################    # T=11
-######################
-######################    matrix = test_array2
-######################    M=3
-######################    T=7
-######################
-######################    assert((matrix > 0).all)
-######################    upper_bound = minc_extended_UB2(matrix)
-######################    print "upper_bound:", upper_bound
-######################    # print "exact_permanent:", calc_permanent_rysers(matrix)  
-######################    # print "exact_permanent1:", npperm(matrix)
-######################
-######################    print "rescaled_tracking_UB =", rescaled_tracking_UB(matrix, M_remaining=M, T_remaining=T)
-######################    # print "exact_permanent:", calc_permanent_rysers(1000*matrix)
-######################
-######################    # print "exact_permanent1:", npperm(1000*matrix)
-######################
-######################    # print matrix
-######################
-######################    # test_permanent_bound_tightness(N=1, use_matrix=True, matrix=matrix)
-######################
-######################    # print "exact_permanent2:", permanent_check(matrix)
-######################
-######################    sleep(-1)
+    sample_from_permutation()
+    exit(0)
 
-######################    nested_UB = 0.0
-######################    for col in range(3):
-######################        cur_submatrix = np.delete(test_nesting_array, [col], 1) #delete columns
-######################        cur_submatrix = np.delete(cur_submatrix, [0], 0) #delete rows
-######################        nested_UB += test_nesting_array[0, col]*minc_extended_UB2(cur_submatrix)
-######################    print "nested_UB:", nested_UB
-######################    test_nesting_array = np.array([[3.87328853e-04, 1.45278918e-03, 1.46793625e-06],
-######################                                   [1.34941249e-01, 1.34941249e-01, 1.00000000e+00],
-######################                                   [1.34941249e-01, 1.34941249e-01, 1.00000000e+00]])
-######################
-######################    print "exact_permanent:", calc_permanent_rysers(test_nesting_array)
-######################    sleep(3)
+    ITERS = 5
+
+    plot_runtime_vs_N(pickle_file_paths = ['./ourUBbound_findBestRowFastTri_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
+                      pickle_file_paths2 =['./nestingProvedUB_noRowSearchFastTri_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
+                       plot_filename='compareNoSearchNestingUB_soules_FastTri_1')
+    plot_runtime_vs_N(pickle_file_paths = ['./ourUBbound_findBestRowFastTri_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)],
+                      pickle_file_paths2 =['./nestingProvedUB_noRowSearchFastTri_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)],
+                       plot_filename='compareNoSearchNestingUB_soules_FastTriDiagMatrix_1')
+    sleep(-111234)
+
+
+
+    N=20
+    deltas = np.array([delta(i + 1) for i in range(N)])
+    print "deltas:", deltas
+    print "sum(deltas):", sum(deltas)
+    # sleep(-2)
+    # matrix = np.exp(EXAMPLE_KITTI_LOG_PROBS)
+    # M=8
+    # T=8
+
+    # matrix = np.exp(EXAMPLE_MOT_LOG_PROBS2)
+    # M=27
+    # T=11
+
+    matrix = test_array2
+    M=3
+    T=7
+
+    assert((matrix > 0).all)
+    upper_bound = minc_extended_UB2(matrix)
+    print "upper_bound:", upper_bound
+    # print "exact_permanent:", calc_permanent_rysers(matrix)  
+    # print "exact_permanent1:", npperm(matrix)
+
+    print "rescaled_tracking_UB =", rescaled_tracking_UB(matrix, M_remaining=M, T_remaining=T)
+    # print "exact_permanent:", calc_permanent_rysers(1000*matrix)
+
+    # print "exact_permanent1:", npperm(1000*matrix)
+
+    # print matrix
+
+    # test_permanent_bound_tightness(N=1, use_matrix=True, matrix=matrix)
+
+    # print "exact_permanent2:", permanent_check(matrix)
+
+    sleep(-1)
+
+    nested_UB = 0.0
+    for col in range(3):
+        cur_submatrix = np.delete(test_nesting_array, [col], 1) #delete columns
+        cur_submatrix = np.delete(cur_submatrix, [0], 0) #delete rows
+        nested_UB += test_nesting_array[0, col]*minc_extended_UB2(cur_submatrix)
+    print "nested_UB:", nested_UB
+    test_nesting_array = np.array([[3.87328853e-04, 1.45278918e-03, 1.46793625e-06],
+                                   [1.34941249e-01, 1.34941249e-01, 1.00000000e+00],
+                                   [1.34941249e-01, 1.34941249e-01, 1.00000000e+00]])
+
+    print "exact_permanent:", calc_permanent_rysers(test_nesting_array)
+    sleep(3)
 
     # test_nesting(N=40)
     # test_permanent_bound_tightness(N=40)  
@@ -4553,27 +3901,17 @@ if __name__ == "__main__":
     edge_matrix = np.asarray(sparse_matrix.todense())
     f.close()
 
-    # N = 25
-
-    # edge_matrix = np.random.rand(N,N)
-
-    if False:
-        t0 = time.time()
-        print "bp lower bound:", get_bp_lower_bound(edge_matrix)
-        t1 = time.time()
-        print "time:", t1-t0
-        sleep(0134)
     # edge_matrix = np.ones((2, 5))
     # print edge_matrix.shape
     # print type(edge_matrix)
     # print edge_matrix[:5,:5]
 
-        print "edge_matrix:"
-        for row in range(edge_matrix.shape[0]):
-            for col in range(edge_matrix.shape[1]):
-                print edge_matrix[row][col],
-            print
-        find_max_assignment(edge_matrix)
+    print "edge_matrix:"
+    for row in range(edge_matrix.shape[0]):
+        for col in range(edge_matrix.shape[1]):
+            print edge_matrix[row][col],
+        print
+    find_max_assignment(edge_matrix)
     # print edge_matrix
     # matrix = np.zeros((edge_matrix.shape[0] + edge_matrix.shape[1], edge_matrix.shape[0] + edge_matrix.shape[1]))
     # for row in range(edge_matrix.shape[0]):
@@ -4583,48 +3921,44 @@ if __name__ == "__main__":
     #             matrix[row][edge_matrix.shape[0] + col] = 1
     #             matrix[edge_matrix.shape[0] + col][row] = 1
     #             # matrix[edge_matrix.shape[0] + row][col] = 1
-        matrix = edge_matrix
-        max_element = np.max(matrix)
-        for row in range(matrix.shape[0]):
-            for col in range(matrix.shape[1]):
-                # print "matrix[row][col]:", matrix[row][col]
-                assert(matrix[row][col] >= 0)
-                if max_element > 1:
-                    matrix[row][col] /= max_element
-                # if matrix[row][col] == 1:
+    matrix = edge_matrix
+    max_element = np.max(matrix)
+    for row in range(matrix.shape[0]):
+        for col in range(matrix.shape[1]):
+            # print "matrix[row][col]:", matrix[row][col]
+            assert(matrix[row][col] >= 0)
+            if max_element > 1:
+                matrix[row][col] /= max_element
+            # if matrix[row][col] == 1:
 
     # print matrix
     # print matrix.transpose()
     # print calc_permanent_rysers(matrix)
 
-    RUN_REAL_DATA_TEST = True
+    RUN_REAL_DATA_TEST = False
     if RUN_REAL_DATA_TEST:
-        if False:
-            print EXAMPLE_MOT_LOG_PROBS2        
-            matrix = np.exp(EXAMPLE_MOT_LOG_PROBS2)
-            print matrix
-            test_permanent_bound_tightness(N=0, use_matrix=True, matrix=matrix)
-            print np.sum(matrix, axis=0)
-            print "np.sum(matrix, axis=0)"
-            # test_permanent_bound_tightness(N=0, use_matrix=True, matrix=matrix/np.sum(matrix, axis=0))
+        print EXAMPLE_MOT_LOG_PROBS2        
+        matrix = np.exp(EXAMPLE_MOT_LOG_PROBS2)
+        print matrix
+        test_permanent_bound_tightness(N=0, use_matrix=True, matrix=matrix)
+        print np.sum(matrix, axis=0)
+        print "np.sum(matrix, axis=0)"
+        # test_permanent_bound_tightness(N=0, use_matrix=True, matrix=matrix/np.sum(matrix, axis=0))
+        # print "np.prod(np.sum(matrix, axis=0)):"
+        # print np.prod(np.sum(matrix, axis=0))
+        # matrix=matrix/np.sum(matrix, axis=0)
 
 
-            
-            # print "np.prod(np.sum(matrix, axis=0)):"
-            # print np.prod(np.sum(matrix, axis=0))
-            # matrix=matrix/np.sum(matrix, axis=0)
+        top_k_assignments = k_best_assignments(100, -EXAMPLE_MOT_LOG_PROBS2)
+        print top_k_assignments[0]
+        print "top assignment vals:"
+        for (cost, assignment) in top_k_assignments:
+            print np.exp(-cost)
 
 
-            top_k_assignments = k_best_assignments(100, -EXAMPLE_MOT_LOG_PROBS2)
-            print top_k_assignments[0]
-            print "top assignment vals:"
-            for (cost, assignment) in top_k_assignments:
-                print np.exp(-cost)
-
-        matrix = edge_matrix
         COMPARE_WAI = False
         print "COMPARE_WAI:", COMPARE_WAI
-        test_gumbel_permanent_estimation(N=0, iters=10, num_samples=1, use_matrix=True, matrix=matrix)    
+        test_gumbel_permanent_estimation(N=0, iters=20, num_samples=1, use_matrix=True, matrix=matrix)    
 
 
 
@@ -4760,10 +4094,10 @@ if __name__ == "__main__":
 
     plot_runtime_vs_N(pickle_file_paths = ['./ourUBbound_findBestRowFastTri_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
                       pickle_file_paths2 =['./nestingProvedUB_noRowSearchFastTri_number_of_times_partition_called_for_each_n_%diters.pickle' % (ITERS)],
-                       plot_filename='compareNoSearchNestingUB_soules_FastTri')
+                       plot_filename='compareNoSearchNestingUB_soules_FastTri_1')
     plot_runtime_vs_N(pickle_file_paths = ['./ourUBbound_findBestRowFastTri_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)],
                       pickle_file_paths2 =['./nestingProvedUB_noRowSearchFastTri_number_of_times_partition_called_for_each_n_%ditersDiagMatrix.pickle' % (ITERS)],
-                       plot_filename='compareNoSearchNestingUB_soules_FastTriDiagMatrix')
+                       plot_filename='compareNoSearchNestingUB_soules_FastTriDiagMatrix_1')
 
     # plot_runtime_vs_N(pickle_file_paths = [pickle_file_path])
     # plot_estimateAndExactPermanent_vs_N(pickle_file_paths = [pickle_file_path])
