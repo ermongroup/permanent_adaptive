@@ -1,4 +1,4 @@
-This repo contains code for the paper "Approximating the Permanent by Sampling from Adaptive Partitions"
+This repo contains code for the paper [Approximating the Permanent by Sampling from Adaptive Partitions](https://arxiv.org/abs/1911.11856)
 
 Neurips 2019 Figure 2 plots were made with make_fig2_plots.py  
 Neurips 2019 Figure 3 plots were made with replot_fromPickle_permanent_bound_tightness_VS_n in compare_bounds.py  
